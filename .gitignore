@@ -1,0 +1,14 @@
+# Compiled executables
+arbiter
+hip
+asp
+
+# Object files
+*.o
+*.out
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
