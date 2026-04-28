@@ -1,12 +1,21 @@
 #pragma once
 #include <string>
+#include <fstream>
+#include <iostream>
+#include <deque>
+#include <utility>
 #include "Characters.h"
 #include "Inventory.h"
 #include "Backpack.h"
+#include <cmath>
+#include "../resources/shared_mem_abs.h"
+
+using std::vector;
+using std::pair;
 
 enum class PlayerType
 {
-    CRONO,
+    CHRONO,
     FROG,
     MARLE,
     MAGUS
@@ -23,6 +32,8 @@ private:
     Backpack backpack;
 
     int nextWeaponId;
+    std::deque<std::pair<int, int>> path_to_follow;
+    sf::Vector2f nextPos;
 
 public:
     Player()
@@ -112,5 +123,58 @@ public:
     {
         return inventory.ownsWeaponType(WeaponType::SOLAR_CORE) &&
                inventory.ownsWeaponType(WeaponType::LUNAR_BLADE);
+    }
+
+    bool movement(bool& completed_section) {
+        // Fetch next checkpoint if the current one is reached
+        if (completed_section) {
+            if (!path_to_follow.empty()) {
+                std::pair<int, int> next_coord = path_to_follow.front();
+
+                nextPos = sf::Vector2f(static_cast<float>(next_coord.first), static_cast<float>(next_coord.second));
+
+                path_to_follow.pop_front();
+                completed_section = false;
+            } else {
+                return true; // Path fully finished
+            }
+        }
+
+        sf::Vector2f direction = nextPos - pos;
+        float dist = std::sqrt(direction.x * direction.x + direction.y * direction.y);
+
+        if (dist > 0) {
+            if (speed >= dist) {
+                // Snap to target to prevent overshooting
+                pos = nextPos;
+                completed_section = true;
+            } else {
+                pos += (direction / dist) * speed;
+            }
+        } else {
+            completed_section = true;
+        }
+
+        return false;
+    }
+
+    std::deque<std::pair<int, int>> getPath(int level, int round) {
+        std::string filename = "../movements/movement_" + std::to_string(level) + "_" + std::to_string(round) + ".txt";
+        std::ifstream file(filename);
+
+        if (!file.is_open()) {
+            throw std::runtime_error("Movement file not found: " + filename);
+        }
+
+        // Clear existing path
+        path_to_follow.clear();
+
+        int x, y;
+        while (file >> x >> y) {
+            path_to_follow.push_back({x, y});
+        }
+        file.close();
+
+        return path_to_follow;
     }
 };

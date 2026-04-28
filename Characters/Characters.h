@@ -1,12 +1,13 @@
+#include <SFML/Graphics.hpp>
 enum class CharacterType
 {
-    ENEMY, 
+    ENEMY,
     PLAYER
 
 };
 enum class ActiveStatus
 {
-    ACTIVE, 
+    ACTIVE,
     STUNNED
 };
 class Character
@@ -28,12 +29,11 @@ class Character
     //ISHOW SPEED
     float speed;
     //coordinates
-    float X_pos;
-    float Y_pos;
+    sf::Vector2f pos;
 
     public:
-    
-    //main action mechanism ig 
+
+    //main action mechanism ig
     virtual void DoAction()=0;
     virtual ~Character(){};
     //Helth related shi
@@ -47,12 +47,12 @@ class Character
     //Stamina
     void ResetStamina()
     {
-        
+
     }
     bool CanAct(){} //check stamina is full type shi
     void UpdateStamina(){} // called for every player every cycle to update stamina
 
-    //stunning 
+    //stunning
     void StunMeh(float duration){}
     void NonStunMen(){}
     bool amStunned () const{}
@@ -81,7 +81,7 @@ class Character
     void setDemage(int demage)
     {
         this->demage = demage;
-    }   
+    }
     int getStamina()
     {
         return stamina;
@@ -141,18 +141,18 @@ class Character
         return X_pos;
     }
     void setXPos(float xPos)
-    {     
+    {
            X_pos = xPos;
     }
     float getYPos()
-    {    
+    {
             return Y_pos;
     }
     void setYPos(float yPos)
-    {   
+    {
          Y_pos = yPos;
-    }   
-        
+    }
+
 
 
 
