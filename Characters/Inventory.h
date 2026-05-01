@@ -4,7 +4,7 @@
 #include <unordered_map>
 #include <algorithm>
 #include <iostream>
-#include "Weapons.h"
+#include "../Weapons/Weapons.h"
 
 class Inventory
 {

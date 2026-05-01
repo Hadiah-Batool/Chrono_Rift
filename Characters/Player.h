@@ -4,10 +4,11 @@
 #include <iostream>
 #include <deque>
 #include <utility>
+#include <cstdlib>
+#include <cmath>
 #include "Characters.h"
 #include "Inventory.h"
 #include "Backpack.h"
-#include <cmath>
 #include "../resources/shared_mem_abs.h"
 
 using std::vector;
@@ -21,65 +22,126 @@ enum class PlayerType
     MAGUS
 };
 
-
 class Player : public Character
 {
 private:
-    PlayerType playerType;
-    std::string name;
+    PlayerType   playerType;
+    std::string  name;
 
     Inventory inventory;
-    Backpack backpack;
+    Backpack  backpack;
 
     int nextWeaponId;
-    std::deque<std::pair<int, int>> path_to_follow;
+    std::deque<std::pair<float, float>> path_to_follow;
     sf::Vector2f nextPos;
 
 public:
-    Player()
+    Player(PlayerType type)
+        : Character(CharacterType::PLAYER), playerType(type)
     {
         nextWeaponId = 1;
     }
 
+    // ── Roll stats ────────────────────────────────────────────
+    // speedOverride = 100.f / numPlayers, computed by Arbiter and passed in
+    // Call setRollNumber() before this
+    virtual void initRollStats(float speedOverride = -1.f) override
+    {
+        srand(rollFull); // roll number is the seed per spec
+
+        maxHp  = rollFull + 100 + (rand() % 901); // rollFull + rand(100-1000)
+        Hp     = maxHp;
+        demage = rollLastDig + 10;                // last digit + 10
+        speed  = (speedOverride > 0.f)            // 100 / numPlayers
+                 ? speedOverride : 100.f;
+
+        MaxStamina = 100;
+        stamina    = 0;
+        alive      = true;
+        myTurn     = false;
+        stunned    = false;
+        stunEndTem = 0;
+    }
+
+    // ── Sprite + position init ────────────────────────────────
+    // Call after initRollStats()
+    bool InitAllProperties(float spawnX, float spawnY)
+    {
+        switch (playerType)
+        {
+            case PlayerType::CHRONO:
+                name = "Chrono";
+                SetOriginSprite(16.0f, 35.0f);
+                SetScaleSprite(5.0f, 4.0f);
+                break;
+
+            case PlayerType::FROG:
+                name = "Frog";
+                SetOriginSprite(16.0f, 24.0f);
+                SetScaleSprite(5.0f, 5.8f);
+                break;
+
+            case PlayerType::MARLE:
+                name = "Marle";
+                SetOriginSprite(16.0f, 35.0f);
+                SetScaleSprite(5.0f, 4.0f);
+                break;
+
+            case PlayerType::MAGUS:
+                name = "Magus";
+                SetOriginSprite(18.0f, 32.0f);
+                SetScaleSprite(4.4f, 4.375f);
+                break;
+
+            default:
+                return false;
+        }
+
+        setXPos(spawnX);
+        setYPos(spawnY);
+        return true;
+    }
+
+    // ── Heal action (10% of maxHp per spec) ──────────────────
+    void heal()
+    {
+        RegainHealth(maxHp / 10);
+    }
+
+    // ── Ultimate check ────────────────────────────────────────
+    bool canUseUltimate() const
+    {
+        return inventory.ownsWeaponType(WeaponType::SOLAR_CORE) &&
+               inventory.ownsWeaponType(WeaponType::LUNAR_BLADE);
+    }
+
+    // ── Getters ───────────────────────────────────────────────
+    std::string  getName()       const { return name; }
+    Inventory&   getInventory()        { return inventory; }
+    Backpack&    getBackpack()         { return backpack; }
+    int          generateWeaponId()    { return nextWeaponId++; }
+
     virtual void DoAction() override
     {
-        // Hook this to turn logic later
+        // Hooked to HIP turn logic
     }
 
-    int generateWeaponId()
-    {
-        return nextWeaponId++;
-    }
-
-    Inventory& getInventory()
-    {
-        return inventory;
-    }
-
-    Backpack& getBackpack()
-    {
-        return backpack;
-    }
-
+    // ── Weapon management ─────────────────────────────────────
     bool pickupWeapon(const Weapon& weapon)
     {
         if (inventory.insertWeapon(weapon))
             return true;
 
-        std::vector<int> toRemove = inventory.findBestWeaponsToRemove(weapon.getSlotSize());
-
-        if (toRemove.empty())
-            return false;
+        std::vector<int> toRemove =
+            inventory.findBestWeaponsToRemove(weapon.getSlotSize());
+        if (toRemove.empty()) return false;
 
         for (int id : toRemove)
         {
             Weapon removed;
             if (inventory.removeWeapon(id, removed))
-            {
                 backpack.addWeapon(removed);
-            }
         }
-
         return inventory.insertWeapon(weapon);
     }
 
@@ -96,18 +158,15 @@ public:
             return true;
         }
 
-        std::vector<int> toRemove = inventory.findBestWeaponsToRemove(weapon.getSlotSize());
-
-        if (toRemove.empty())
-            return false;
+        std::vector<int> toRemove =
+            inventory.findBestWeaponsToRemove(weapon.getSlotSize());
+        if (toRemove.empty()) return false;
 
         for (int id : toRemove)
         {
             Weapon removed;
             if (inventory.removeWeapon(id, removed))
-            {
                 backpack.addWeapon(removed);
-            }
         }
 
         if (inventory.insertWeapon(weapon))
@@ -115,66 +174,51 @@ public:
             backpack.removeWeaponAt(backpackIndex);
             return true;
         }
-
         return false;
     }
 
-    bool canUseUltimate() const
+    // ── Movement ──────────────────────────────────────────────
+    bool movement(bool& completed_section)
     {
-        return inventory.ownsWeaponType(WeaponType::SOLAR_CORE) &&
-               inventory.ownsWeaponType(WeaponType::LUNAR_BLADE);
-    }
-
-    bool movement(bool& completed_section) {
-        // Fetch next checkpoint if the current one is reached
-        if (completed_section) {
-            if (!path_to_follow.empty()) {
-                std::pair<int, int> next_coord = path_to_follow.front();
-
-                nextPos = sf::Vector2f(static_cast<float>(next_coord.first), static_cast<float>(next_coord.second));
-
+        if (completed_section)
+        {
+            if (!path_to_follow.empty())
+            {
+                auto next_coord   = path_to_follow.front();
+                nextPos           = sf::Vector2f(next_coord.first, next_coord.second);
                 path_to_follow.pop_front();
                 completed_section = false;
-            } else {
-                return true; // Path fully finished
             }
+            else return true;
         }
 
         sf::Vector2f direction = nextPos - pos;
-        float dist = std::sqrt(direction.x * direction.x + direction.y * direction.y);
+        float dist = std::sqrt(direction.x * direction.x +
+                               direction.y * direction.y);
 
-        if (dist > 0) {
-            if (speed >= dist) {
-                // Snap to target to prevent overshooting
-                pos = nextPos;
-                completed_section = true;
-            } else {
-                pos += (direction / dist) * speed;
-            }
-        } else {
-            completed_section = true;
+        if (dist > 0)
+        {
+            if (speed >= dist) { pos = nextPos; completed_section = true; }
+            else               pos += (direction / dist) * speed;
         }
+        else completed_section = true;
 
         return false;
     }
 
-    std::deque<std::pair<int, int>> getPath(int level, int round) {
-        std::string filename = "../movements/movement_" + std::to_string(level) + "_" + std::to_string(round) + ".txt";
+    std::deque<std::pair<float, float>> getPath(int level, int round)
+    {
+        std::string filename = "Cooking on a weekend like usual.txt";
         std::ifstream file(filename);
-
-        if (!file.is_open()) {
+        if (!file.is_open())
             throw std::runtime_error("Movement file not found: " + filename);
-        }
 
-        // Clear existing path
         path_to_follow.clear();
+        float x, y;
+        while (file >> x >> y)
+            path_to_follow.push_back({x * 0.78125f, y * 0.78125f});
 
-        int x, y;
-        while (file >> x >> y) {
-            path_to_follow.push_back({x, y});
-        }
         file.close();
-
         return path_to_follow;
     }
 };
