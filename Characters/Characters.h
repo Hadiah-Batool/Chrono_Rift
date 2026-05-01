@@ -183,7 +183,12 @@ public:
     bool  isMyTurn()       const { return myTurn; }
     void  setMyTurn(bool v)      { myTurn = v; }
     bool  isStunned()      const { return stunned; }
-    void  setStunned(bool v)     { stunned = v; }
+    void  setStunned(bool v, int turn_num)
+         { 
+            stunned = v;
+              stunEndTem = turn_num + 3; /* 3 turns per spec */
+        }
+         
     int   getStunEndTem()  const { return stunEndTem; }
     void  setStunEndTem(int v)   { stunEndTem = v; }
     float getSpeed()       const { return speed; }

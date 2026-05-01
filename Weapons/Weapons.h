@@ -6,15 +6,15 @@ using namespace std;
 using namespace sf;
 enum class WeaponType
 {
-    SOLAR_CORE,
-    LUNAR_BLADE,
+
     IRON_HALBERD,
     VENOM_DAGGER,
     THUNDERSTAFF,
     OBSIDIAN_AXE,
     FROSTBOW,
     SPLINTER_STICK,
-    ECLIPSE_RELIC
+    ARTIFACT
+
 };
 //as enum gives shi to stuff it'll be foin hopefully
 class Weapon
@@ -48,3 +48,86 @@ public:
 
     void setUsable(bool value) { canBeUsed = value; }
 };
+
+
+
+
+
+
+enum class ArtifactType {
+    SOLAR_CORE,
+    LUNAR_BLADE,
+    ECLIPSE_RELIC
+};
+
+enum class PassiveEffect {
+    DAMAGE_BOOST,       // Solar Core  — boosts attack damage
+    STUN_ON_HIT,        // Lunar Blade — chance to stun target
+    ULTIMATE_ENABLE     // Eclipse Relic — unlocks ultimate when paired
+};
+
+class Artifact : public Weapon
+{
+private:
+    ArtifactType  artifactType;
+    PassiveEffect passiveEffect;
+    int           holder_id;      // -1 if no one holds it
+    bool          exists;         // Eclipse Relic starts as false
+
+public:
+    Artifact(int weaponID, ArtifactType type, const std::string& name,
+             int damage, int slotSize)
+        : Weapon(weaponID  , WeaponType::ARTIFACT, name, slotSize, damage),
+          artifactType(type),
+          holder_id(-1),
+          exists(true)
+    {
+        // Assign passive based on type
+        switch (type)
+        {
+            case ArtifactType::SOLAR_CORE:
+                passiveEffect = PassiveEffect::DAMAGE_BOOST;
+                break;
+            case ArtifactType::LUNAR_BLADE:
+                passiveEffect = PassiveEffect::STUN_ON_HIT;
+                break;
+            case ArtifactType::ECLIPSE_RELIC:
+                passiveEffect = PassiveEffect::ULTIMATE_ENABLE;
+                exists = false;   // not in game until introduced
+                break;
+        }
+    }
+
+    // ── Passive application ───────────────────────────────────
+    // Call this in Arbiter after every attack that uses this artifact
+    int applyPassive(int baseDamage, Character* target = nullptr)
+    {
+        switch (passiveEffect)
+        {
+            case PassiveEffect::DAMAGE_BOOST:
+                return (int)(baseDamage * 1.25f);   // +25% damage
+
+            case PassiveEffect::STUN_ON_HIT:
+                if (target && (rand() % 100) < 30)  // 30% stun chance
+                    target->setStunned(true, 2);     // stun for 2 turns
+                return baseDamage;
+
+            case PassiveEffect::ULTIMATE_ENABLE:
+                return baseDamage;   // passive only, no damage change
+        }
+        return baseDamage;
+    }
+
+    // ── Ownership ─────────────────────────────────────────────
+    bool isHeld()           const { return holder_id != -1; }
+    int  getHolder()        const { return holder_id; }
+    void setHolder(int id)        { holder_id = id; }
+    void release()                { holder_id = -1; }
+
+    bool isAvailable()      const { return exists && !isHeld(); }
+    void introduce()              { exists = true; }   // for Eclipse Relic
+
+    ArtifactType  getArtifactType()  const { return artifactType; }
+    PassiveEffect getPassiveEffect() const { return passiveEffect; }
+};
+

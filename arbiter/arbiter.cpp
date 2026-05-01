@@ -12,6 +12,8 @@
 #include <sys/wait.h>
 #include <string>
 #include "../Characters/Player.h"
+#include "../Characters/Enemy.h"
+#include "../Weapons/Weapons.h"
 #include <fcntl.h>      // for shm_open
 #include <sys/mman.h>   // for mmap
 #include <cstring>      // for strerror
@@ -23,13 +25,15 @@ using std::mutex;
 using std::condition_variable;
 
 
-struct Stamina {
+struct Stamina 
+{
     float current_stamina;
     float max_stamina;
     float recovery_rate; // stamina points recovered per second
 };
 
-struct Thread_Player{
+struct Thread_Player
+{
     int thread_id;
     bool is_player; // checks if player or enemy
     bool turn; // checks if it's the player's turn
@@ -41,6 +45,7 @@ struct GameState{
     pthread_mutex_t global_mutex; // mutex for synchronizing access to the game state
     pthread_mutex_t resource_table_mutex; // for artifacts
     pthread_cond_t turn_condition; // for syncing turns
+
 
 
     bool game_running;
@@ -64,15 +69,20 @@ struct GameState{
     int enemies_defeated;
     int attack_weapon_id; // which weapon to attack with
 
-    struct special_weapon {
+
+    struct special_weapon 
+    {
         int solar_core_holder;   // -1 if free, otherwise entity ID
         int lunar_blade_holder;  // -1 if free
         int eclipse_relic_holder; // -1 if not introduced or free
         bool eclipse_relic_exists; // 0/1
     };
-
+    special_weapon special_weapon_status;
     // stunned entities, idk how to make em
     // bool paused;
+
+    //Action Log type shi->Naam se zahir ho rha
+    ActionLog action_log;
 
 };
 
@@ -126,7 +136,8 @@ void* stamina_recovery(void* arg){
     return nullptr;
 }
 
-void* deadlock_detection(void* arg){
+void* deadlock_detection(void* arg)
+{
     while(true){
         // Check for deadlocks and resolve them
         sleep(5); // Sleep for 5 seconds before checking again
@@ -200,10 +211,10 @@ int main(int argc, char* argv[]) {
     shared_game_state->sublevel = 1;
     shared_game_state->enemies_defeated = 0;
     shared_game_state->attack_weapon_id = -1;
-    shared_game_state->special_weapon.solar_core_holder = -1;
-    shared_game_state->special_weapon.lunar_blade_holder = -1;
-    shared_game_state->special_weapon.eclipse_relic_holder = -1;
-    shared_game_state->special_weapon.eclipse_relic_exists = false;
+    shared_game_state->special_weapon_status.solar_core_holder = -1;
+    shared_game_state->special_weapon_status.lunar_blade_holder = -1;
+    shared_game_state->special_weapon_status.eclipse_relic_holder = -1;
+    shared_game_state->special_weapon_status.eclipse_relic_exists = false;
     shared_game_state->current_turn_index = 0;
     // players and enemies vectors will be populated later
 

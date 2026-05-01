@@ -32,7 +32,7 @@ int main()
     // Mess with some values so the bars look interesting
     chrono.setHp(45);          // low HP — bar should go red
     frog.setStamina(70);
-    marle.setStunned(true);    // stunned — badge + bar goes yellow
+    marle.setStunned(true, 0);    // stunned — badge + bar goes yellow
     marle.setStunEndTem(3);
 
     // // ── Enemies ───────────────────────────────────────────────────────────────

@@ -111,8 +111,8 @@ public:
     // ── Ultimate check ────────────────────────────────────────
     bool canUseUltimate() const
     {
-        return inventory.ownsWeaponType(WeaponType::SOLAR_CORE) &&
-               inventory.ownsWeaponType(WeaponType::LUNAR_BLADE);
+        return inventory.ownsWeaponType(WeaponType::ARTIFACT);
+        //ADD SOLAR AND LUNAR CHECKS LATER IF WE DECIDE TO MAKE EM SEPARATE
     }
 
     // ── Getters ───────────────────────────────────────────────
@@ -221,4 +221,6 @@ public:
         file.close();
         return path_to_follow;
     }
+    //ATTACK EM BEES
+    
 };

@@ -9,6 +9,7 @@
 #include "../Characters/Player.h"
 #include "../Characters/Enemy.h"
 #include "Map.h"
+#include "../shared/shared_types.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  FONT SIZE CONSTANTS — tweak these to resize text globally
@@ -162,8 +163,8 @@ private:
 
         struct WEntry { int typeInt; const char* path; };
         WEntry weaponPaths[] = {
-            { (int)WeaponType::SOLAR_CORE,    "../Weapons_sprites/Solar_Core.png"     },
-            { (int)WeaponType::LUNAR_BLADE,   "../Weapons_sprites/Lunar_Blade.png"    },
+            { (int)WeaponType::ARTIFACT,    "../Weapons_sprites/Solar_Core.png"     },
+            { (int)WeaponType::ARTIFACT,   "../Weapons_sprites/Lunar_Blade.png"    },
             { (int)WeaponType::IRON_HALBERD,  "../Weapons_sprites/Iron_Halberd.png"   },
             { (int)WeaponType::VENOM_DAGGER,  "../Weapons_sprites/Venom_Dagger.png"   },
             { (int)WeaponType::THUNDERSTAFF,  "../Weapons_sprites/Thunder_staff.png"  },
@@ -580,8 +581,8 @@ private:
 {
     struct WDef { WeaponType t; const char* name; int slots; int dmg; };
     WDef defs[] = {
-        { WeaponType::SOLAR_CORE,    "Solar Core",     10, 95 },
-        { WeaponType::LUNAR_BLADE,   "Lunar Blade",    10, 90 },
+        { WeaponType::ARTIFACT,    "Solar Core",     10, 95 },
+        { WeaponType::ARTIFACT,   "Lunar Blade",    10, 90 },
         { WeaponType::IRON_HALBERD,  "Iron Halberd",    7, 55 },
         { WeaponType::VENOM_DAGGER,  "Venom Dagger",    4, 30 },
         { WeaponType::SPLINTER_STICK,"Splinter Stick",  2, 12 },
