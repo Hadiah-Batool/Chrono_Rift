@@ -3,6 +3,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <vector>
+#include <array>
 #include <queue>
 #include <signal.h>
 #include <iostream>
@@ -17,125 +18,81 @@
 #include <fcntl.h>      // for shm_open
 #include <sys/mman.h>   // for mmap
 #include <cstring>      // for strerror
+#include "../shared/shared_types.h"
 
 using std::vector;
 using std::cout;
 using std::endl;
 using std::mutex;
 using std::condition_variable;
-
-
-struct Stamina 
-{
-    float current_stamina;
-    float max_stamina;
-    float recovery_rate; // stamina points recovered per second
-};
-
-struct Thread_Player
-{
-    int thread_id;
-    bool is_player; // checks if player or enemy
-    bool turn; // checks if it's the player's turn
-    SharedMemPipe* shared_mem; // pointer to shared memory that acts as a pipe
-    Stamina stamina; // stamina struct for the player or enemy
-};
-
-struct GameState{
-    pthread_mutex_t global_mutex; // mutex for synchronizing access to the game state
-    pthread_mutex_t resource_table_mutex; // for artifacts
-    pthread_cond_t turn_condition; // for syncing turns
-
-
-
-    bool game_running;
-    bool game_result; // true if player wins, false if enemy wins
-
-    int turn_count; // counts the number of turns taken
-
-    vector<Player> players;
-    vector<Artifact> artifacts;
-    vector<Enemy> enemies;
-
-    bool turn; // true if it's player's turn, false if it's enemy's turn
-    int current_turn_index; // index of the player or enemy whose turn it is
-
-    int choice; // attack, skip etc
-    int attack_choice; // which person to attack if attack chosen
-
-    int level;
-    int sublevel;
-
-    int enemies_defeated;
-    int attack_weapon_id; // which weapon to attack with
-
-
-    struct special_weapon 
-    {
-        int solar_core_holder;   // -1 if free, otherwise entity ID
-        int lunar_blade_holder;  // -1 if free
-        int eclipse_relic_holder; // -1 if not introduced or free
-        bool eclipse_relic_exists; // 0/1
-    };
-    special_weapon special_weapon_status;
-    // stunned entities, idk how to make em
-    // bool paused;
-
-    //Action Log type shi->Naam se zahir ho rha
-    ActionLog action_log;
-
-};
-
-struct HIP_Message {
-    int player_id;
-    int action; // 0 for skip, 1 for attack, 2 for use ultimate etc etc
-    int target_id; // which enemy to attack if action is attack
-    int weapon_id; // which weapon to use if action is attack or use ultimate
-};
+using std::array;
 
 
 
 
 class Arbiter{
-    vector<Thread_Player> players;
-    vector<Thread_Player> suspened; // use signals only
+    std::array<Thread_Player, 13> players; // max 4 players + 9 enemies
+    int num_players = 0;
+    std::array<Thread_Player, 13> suspened; // use signals only
+    int num_suspened = 0;
     GameState game_state;
     int strategic_time = 3; // 3 seconds for making a move
 
 public:
     Arbiter(){
-        players = vector<Thread_Player>();
-        suspened = vector<Thread_Player>();
         game_state = GameState();
     }
 
     // it will create shared memory itself and pass it to the players
     SharedMemPipe* add_player(int thread_id, bool is_player){
+        if (num_players >= 13) return nullptr; // array is full
         Thread_Player new_player;
         new_player.thread_id = thread_id;
         new_player.is_player = is_player;
         new_player.turn = false;
         new_player.shared_mem = new SharedMemPipe(("player_pipe_" + std::to_string(thread_id)).c_str(), 1024, true, true);
-        players.push_back(new_player);
+        players[num_players] = new_player;
+        num_players++;
         return new_player.shared_mem;
+    }
+
+    std::array<Thread_Player, 13>& get_players() {
+        return players;
+    }
+
+    int get_num_players() const {
+        return num_players;
     }
 };
 
 
-// for stamina thread, doesn't sleep, constantly adds stamina, should modify the original vector
+// 1. Updated Stamina Thread
 void* stamina_recovery(void* arg){
-    auto* character_staminas = static_cast<vector<Stamina>*>(arg);
+    // Cast to the Master Block, not GameState
+    auto* shared_block = static_cast<SharedMemoryBlock*>(arg);
 
     while(true){
-        for (auto& stamina : *character_staminas) {
-            stamina.current_stamina = std::min(stamina.current_stamina + stamina.recovery_rate, stamina.max_stamina);
-        }
-        usleep(100000); // Sleep for 100ms to avoid 100% CPU usage
-    }
+        // Lock the global mutex from the block
+        pthread_mutex_lock(&shared_block->global_mutex);
 
+        for (int i = 0; i < shared_block->state.num_active_players; ++i) {
+            auto& player = shared_block->state.players[i];
+            if (player.isAlive()) {
+                player.setStamina(player.getStamina() + player.getStaminaRecoveryRate());
+            }
+        }
+        for (int i = 0; i < shared_block->state.num_active_enemies; ++i) {
+            auto& enemy = shared_block->state.enemies[i];
+            if (enemy.isAlive()) {
+                enemy.setStamina(enemy.getStamina() + enemy.getStaminaRecoveryRate());
+            }
+        }
+
+        pthread_mutex_unlock(&shared_block->global_mutex);
+        usleep(100000); // 100ms
+    }
     return nullptr;
 }
-
 void* deadlock_detection(void* arg)
 {
     while(true){
@@ -146,96 +103,117 @@ void* deadlock_detection(void* arg)
 }
 
 
-// pick the first player that has full stamina, if no one has full stamina, return nullptr
-Thread_Player* find_turn(vector<Thread_Player>& players){
-    for(auto& player : players){
-        if(player.stamina.current_stamina >= player.stamina.max_stamina){
-            return &player;
+// pick the first player/enemy that has full stamina, if no one has full stamina, return nullptr
+// randomly chooses what to find in first, player or enemy
+void find_turn(std::array<Player, 4>* players_arr, int num_active_players,
+               std::array<Enemy, 9>* enemies_arr, int num_active_enemies,
+               int* out_turn_index, bool* out_turn){
+
+    *out_turn_index = -1;
+    bool check_players_first = rand() % 2 == 0;
+    if(check_players_first){
+        for(int i = 0; i < num_active_players; ++i){
+            if((*players_arr)[i].getStamina() >= (*players_arr)[i].getMaxStamina()){
+                *out_turn_index = i;
+                *out_turn = true;
+                return;
+            }
+        }
+        for(int i = 0; i < num_active_enemies; ++i){
+            if((*enemies_arr)[i].getStamina() >= (*enemies_arr)[i].getMaxStamina()){
+                *out_turn_index = num_active_players + i;
+                *out_turn = false;
+                return;
+            }
         }
     }
-    return nullptr;
+
+    else {
+        for(int i = 0; i < num_active_enemies; ++i){
+            if((*enemies_arr)[i].getStamina() >= (*enemies_arr)[i].getMaxStamina()){
+                *out_turn_index = num_active_players + i;
+                *out_turn = false;
+                return;
+            }
+        }
+         for(int i = 0; i < num_active_players; ++i){
+            if((*players_arr)[i].getStamina() >= (*players_arr)[i].getMaxStamina()){
+                *out_turn_index = i;
+                *out_turn = true;
+                return;
+            }
+        }
+    }
+
 }
 
-
 int main(int argc, char* argv[]) {
-    Arbiter arbiter;
-    SharedMemPipe* hip_pipe = nullptr;
-    SharedMemPipe* asp_pipe = nullptr;
+    // 1. Seed the Random Number Generator using your Roll Number
+    unsigned int seed = std::hash<std::string>{}("24I0607");
+    srand(seed);
 
-    pthread_t stamina_accumalator, turn_decider, deadlock_detector; // stamina will run 4ever, turn will be blocked, deadlock will run every 5 seconds
-    vector<Stamina> entities_stamina; // init after both hip and asp are made
+    // Thread handles
+    pthread_t stamina_accumalator, deadlock_detector;
 
-    // --- Create shared memory for GameState ---
+    // 2. --- Create Shared Memory for the Master Block ---
     const char* shm_name = "/game_state_shm";
+
+    // Unlink first just in case a previous crash left the memory hanging
+    shm_unlink(shm_name);
+
     int shm_fd = shm_open(shm_name, O_CREAT | O_RDWR, 0666);
     if (shm_fd == -1) {
         std::cerr << "shm_open failed: " << strerror(errno) << std::endl;
         return 1;
     }
-    // Set size
-    if (ftruncate(shm_fd, sizeof(GameState)) == -1) {
+
+    if (ftruncate(shm_fd, sizeof(SharedMemoryBlock)) == -1) {
         std::cerr << "ftruncate failed: " << strerror(errno) << std::endl;
         return 1;
     }
-    // Map into Arbiter's address space
-    GameState* shared_game_state = (GameState*)mmap(NULL, sizeof(GameState),
-                                                    PROT_READ | PROT_WRITE,
-                                                    MAP_SHARED, shm_fd, 0);
-    if (shared_game_state == MAP_FAILED) {
+
+    SharedMemoryBlock* shared_block = (SharedMemoryBlock*)mmap(NULL, sizeof(SharedMemoryBlock),
+                                                    PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (shared_block == MAP_FAILED) {
         std::cerr << "mmap failed: " << strerror(errno) << std::endl;
         return 1;
     }
 
-    // --- Initialize the mutex and condition variable (process-shared) ---
+    // 3. --- Initialize the Mutexes and Condition Variables (Process-Shared) ---
     pthread_mutexattr_t mutex_attr;
     pthread_mutexattr_init(&mutex_attr);
     pthread_mutexattr_setpshared(&mutex_attr, PTHREAD_PROCESS_SHARED);
-    pthread_mutex_init(&shared_game_state->global_mutex, &mutex_attr);
-    pthread_mutex_init(&shared_game_state->resource_table_mutex, &mutex_attr);
+
+    pthread_mutex_init(&shared_block->global_mutex, &mutex_attr);
+    pthread_mutex_init(&shared_block->resource_table_mutex, &mutex_attr);
     pthread_mutexattr_destroy(&mutex_attr);
 
     pthread_condattr_t cond_attr;
     pthread_condattr_init(&cond_attr);
     pthread_condattr_setpshared(&cond_attr, PTHREAD_PROCESS_SHARED);
-    pthread_cond_init(&shared_game_state->turn_condition, &cond_attr);
+    pthread_cond_init(&shared_block->turn_condition, &cond_attr);
     pthread_condattr_destroy(&cond_attr);
 
-    // Initialize other GameState fields as needed
-    shared_game_state->game_running = true;
-    shared_game_state->turn = true;   // example: player starts
-    shared_game_state->turn_count = 0;
-    shared_game_state->game_result = true;
-    shared_game_state->choice = -1;
-    shared_game_state->attack_choice = -1;
-    shared_game_state->level = 1;
-    shared_game_state->sublevel = 1;
-    shared_game_state->enemies_defeated = 0;
-    shared_game_state->attack_weapon_id = -1;
-    shared_game_state->special_weapon_status.solar_core_holder = -1;
-    shared_game_state->special_weapon_status.lunar_blade_holder = -1;
-    shared_game_state->special_weapon_status.eclipse_relic_holder = -1;
-    shared_game_state->special_weapon_status.eclipse_relic_exists = false;
-    shared_game_state->current_turn_index = 0;
-    // players and enemies vectors will be populated later
+    // 4. --- Setup Initial Game State ---
+    shared_block->state.game_running = true;
+    shared_block->state.turn_count = 0;
+    shared_block->state.level = 1;
+    shared_block->state.sublevel = 1;
+    shared_block->state.enemies_defeated = 0;
+    shared_block->state.current_turn_owner_id = -1;
 
-    try {
-        hip_pipe = new SharedMemPipe("HIP_pipe", 1024, true, true);
-    } catch (const std::exception& e) {
-        std::cerr << "Error creating shared memory: " << e.what() << std::endl;
-        return 1;
-    }
+    // Ensure Mailboxes start empty
+    shared_block->hip_mailbox.is_ready = false;
+    shared_block->asp_mailbox.is_ready = false;
 
-    try {
-        asp_pipe = new SharedMemPipe("ASP_pipe", 1024, true, true);
-    } catch (const std::exception& e) {
-        std::cerr << "Error creating shared memory: " << e.what() << std::endl;
-        return 1;
-    }
+    // TODO: Populate shared_block->state.players and state.enemies arrays here
+    // TODO: Set shared_block->state.num_active_players and num_active_enemies
 
+    // 5. --- Fork Child Processes ---
     pid_t hip_pid = fork();
     if (hip_pid == 0) {
-        // Child process for HIP
-        execl("./hip", "./hip", "HIP_pipe", shm_name, nullptr);
+        // We pass the shm_name so HIP knows exactly which memory block to map
+        execl("./hip", "./hip", shm_name, nullptr);
         std::cerr << "Failed to exec HIP process" << std::endl;
         return 1;
     } else if (hip_pid < 0) {
@@ -245,8 +223,7 @@ int main(int argc, char* argv[]) {
 
     pid_t asp_pid = fork();
     if (asp_pid == 0) {
-        // Child process for ASP
-        execl("./asp", "./asp", "ASP_pipe", shm_name, nullptr);
+        execl("./asp", "./asp", shm_name, nullptr);
         std::cerr << "Failed to exec ASP process" << std::endl;
         return 1;
     } else if (asp_pid < 0) {
@@ -254,12 +231,93 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // 6. --- Ignite Background Threads ---
+    // Pass the shared_block so threads can lock the master mutex
+    pthread_create(&stamina_accumalator, NULL, stamina_recovery, shared_block);
+    pthread_create(&deadlock_detector, NULL, deadlock_detection, NULL);
 
-    // handling signals type shi
+    // 7. --- The Main Arbiter Event Loop (Kernel Logic) ---
+    std::cout << "[ARBITER] System Kernel Online. Commencing Simulation." << std::endl;
 
+    while (shared_block->state.game_running) {
+        pthread_mutex_lock(&shared_block->global_mutex);
 
-    // Cleanup shared memory
-    munmap(shared_game_state, sizeof(GameState));
+        int turn_index = -1;
+        bool is_player = false;
+
+        // Check if anyone is ready to act
+        find_turn(&shared_block->state.players, shared_block->state.num_active_players,
+                  &shared_block->state.enemies, shared_block->state.num_active_enemies,
+                  &turn_index, &is_player);
+
+        if (turn_index != -1) {
+            // Assign the turn
+            shared_block->state.current_turn_owner_id = turn_index;
+            shared_block->state.is_player_turn = is_player;
+
+            // Flush mailboxes and wake up the child processes
+            shared_block->hip_mailbox.is_ready = false;
+            shared_block->asp_mailbox.is_ready = false;
+            pthread_cond_broadcast(&shared_block->turn_condition);
+
+            // Step D: Wait for the valid response
+            if (is_player) {
+                // Wait for HIP
+                while (!shared_block->hip_mailbox.is_ready) {
+                    pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
+                }
+
+                std::cout << "[ARBITER] Player " << turn_index
+                          << " executed action: " << shared_block->hip_mailbox.action_type << std::endl;
+
+                // TODO: Apply HIP Action Math here
+
+                shared_block->state.players[turn_index].setStamina(0);
+
+            } else {
+                // Wait for ASP
+                while (!shared_block->asp_mailbox.is_ready) {
+                    pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
+                }
+
+                int enemy_actual_index = turn_index - shared_block->state.num_active_players;
+                std::cout << "[ARBITER] Enemy " << enemy_actual_index
+                          << " executed action: " << shared_block->asp_mailbox.action_type << std::endl;
+
+                // TODO: Apply ASP Action Math here
+
+                shared_block->state.enemies[enemy_actual_index].setStamina(0);
+            }
+
+            // TODO: Check win/loss/quit conditions here. If true, set game_running = false.
+        }
+
+        pthread_mutex_unlock(&shared_block->global_mutex);
+
+        // Prevent aggressive CPU spinning while waiting for stamina to build
+        usleep(10000);
+    }
+
+    std::cout << "[ARBITER] Simulation Terminated. Cleaning up resources..." << std::endl;
+
+    // Send SIGTERM to children if they haven't died gracefully
+    kill(hip_pid, SIGTERM);
+    kill(asp_pid, SIGTERM);
+
+    // Wait for children to exit safely so they don't become zombies
+    // waitpid(hip_pid, NULL, 0);
+    // waitpid(asp_pid, NULL, 0);
+
+    // TODO: use a flag instead
+    pthread_cancel(stamina_accumalator);
+    pthread_cancel(deadlock_detector);
+
+    // Unmap and unlink memory
+    pthread_mutex_destroy(&shared_block->global_mutex);
+    pthread_mutex_destroy(&shared_block->resource_table_mutex);
+    pthread_cond_destroy(&shared_block->turn_condition);
+
+    munmap(shared_block, sizeof(SharedMemoryBlock));
     shm_unlink(shm_name);
 
     return 0;
