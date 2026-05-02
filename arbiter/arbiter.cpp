@@ -213,23 +213,11 @@ int main(int argc, char* argv[]) {
     const char* shm_name = "/game_state_shm";
     shm_unlink(shm_name); // Clean up any zombie memory from previous crashes
 
-    int shm_fd = shm_open(shm_name, O_CREAT | O_RDWR, 0666);
-    if (shm_fd == -1) {
-        std::cerr << "shm_open failed: " << strerror(errno) << std::endl;
-        return 1;
-    }
+    // Instantiate your SharedMem wrapper class to handle creation and mapping securely
+    SharedMem master_shm(shm_name, sizeof(SharedMemoryBlock), true, true);
 
-    if (ftruncate(shm_fd, sizeof(SharedMemoryBlock)) == -1) {
-        std::cerr << "ftruncate failed: " << strerror(errno) << std::endl;
-        return 1;
-    }
-
-    SharedMemoryBlock* shared_block = (SharedMemoryBlock*)mmap(NULL, sizeof(SharedMemoryBlock),
-                                                    PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (shared_block == MAP_FAILED) {
-        std::cerr << "mmap failed: " << strerror(errno) << std::endl;
-        return 1;
-    }
+    // Cast the raw pointer directly to our SharedMemoryBlock
+    SharedMemoryBlock* shared_block = static_cast<SharedMemoryBlock*>(master_shm.getPtr());
 
     // 3. --- Initialize the Process-Shared Mutexes and CVs ---
     pthread_mutexattr_t mutex_attr;
@@ -339,12 +327,12 @@ int main(int argc, char* argv[]) {
     pthread_cancel(stamina_accumalator);
     pthread_cancel(deadlock_detector);
 
+    // Unmap and unlink memory
     pthread_mutex_destroy(&shared_block->global_mutex);
     pthread_mutex_destroy(&shared_block->resource_table_mutex);
     pthread_cond_destroy(&shared_block->turn_condition);
 
-    munmap(shared_block, sizeof(SharedMemoryBlock));
-    shm_unlink(shm_name);
+    // Note: No need for munmap or shm_unlink here because the master_shm destructor handles it automatically.
 
     return 0;
 }
