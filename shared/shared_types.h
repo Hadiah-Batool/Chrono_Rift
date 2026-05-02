@@ -7,6 +7,15 @@
 #define ACTION_LOG_SIZE 10      // stores last 10 actions
 #define ACTION_MSG_LEN  128     // max chars per message
 
+enum class Action {
+    STRIKE      = 0,
+    EXHAUST     = 1,
+    USE_WEAPON  = 2,
+    SWAP_IN     = 3,
+    HEAL        = 4,
+    SKIP        = 5
+};
+
 struct ActionLog {
     char    messages[ACTION_LOG_SIZE][ACTION_MSG_LEN];
     int     head;               // index of oldest message
@@ -24,7 +33,7 @@ struct Stamina {
 // ---------------------------------------------------------
 struct ActionRequest {
     int requesting_entity_id; // The index of the player/enemy taking the action
-    int action_type;          // e.g., 0: Skip, 1: Strike, 2: Exhaust, 3: Use Weapon, etc.
+    Action action_type;          // e.g., Action::SKIP, Action::STRIKE, etc.
     int target_id;            // Which enemy/player is being attacked
     int weapon_id;            // Which weapon to use (if applicable)
 

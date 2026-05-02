@@ -31,7 +31,7 @@ protected:
     bool  alive;
     bool  myTurn;
     bool  stunned;
-    int   stunEndTem;
+    time_t   stunEndTem;
 
     // ── Movement ─────────────────────────────────────────────
     float        speed;
@@ -116,7 +116,7 @@ public:
     bool CanAct() const { return isReadyToAct(); }
 
     // ── Stun ─────────────────────────────────────────────────
-    void applyStun()
+    void applyStun(time_t stun)
     {
         stunned    = true;
         stunEndTem = 3;             // 3 seconds per spec
@@ -133,6 +133,7 @@ public:
 
     bool amStunned() const { return stunned; }
     bool amAlive()   const { return alive; }
+    float getStaminaRecoveryRate() const { return speed; }
 
     // ── Sprite helpers ────────────────────────────────────────
     bool loadTexture(const std::string& path)
@@ -144,7 +145,7 @@ public:
         }
         return false;
     }
-
+    
     void SetScaleSprite(float scaleX, float scaleY)
     {
         sprite.setScale(scaleX, scaleY);

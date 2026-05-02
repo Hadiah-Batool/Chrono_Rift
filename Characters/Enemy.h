@@ -18,6 +18,7 @@ enum class EnemyType
     MUTANT_ENEMY,
     NIZBELN_ENEMY,
     RATnGERMLIN_ENEMY,
+    GOBLIN_OGAN_ENEMY
 
 };
 
@@ -26,7 +27,7 @@ class Enemy : public Character
 private:
     EnemyType   enemyType;
     int         enemyId;
-    std::string name;
+    char name[64];
 
 public:
     Enemy(int id, EnemyType type)
@@ -34,7 +35,7 @@ public:
           enemyId(id),
           enemyType(type)
     {}
-
+    const char* getName()      const { return name; }
     // ── Roll stats ────────────────────────────────────────────
     // Call setRollNumber() before this
     // speedOverride unused for enemy (speed is fully random) — kept to
@@ -67,63 +68,80 @@ public:
         switch (enemyType)
         {
             case EnemyType::ALIEN_ENEMY:
-                name = "Alien-" + std::to_string(enemyId);
+                strncpy(name, "Alien", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null
                 SetOriginSprite(16.0f, 32.0f);
                 SetScaleSprite(4.0f, 4.0f);
                 break;
             case EnemyType::BEAST_ENEMY  :
-                name = "Brute-" + std::to_string(enemyId);
-                SetOriginSprite(18.0f, 36.0f);
-                SetScaleSprite(5.0f, 5.0f);
+                strncpy(name, "Beast", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null
+                SetOriginSprite(28.0f, 34.0f);
+                SetScaleSprite(4.0f, 4.0f);
                 break;
             case EnemyType::CYBOT_ENEMY:
-                name = "Cybot-" + std::to_string(enemyId);
-                SetOriginSprite(16.0f, 30.0f);
-                SetScaleSprite(4.5f, 4.5f);
+                strncpy(name, "Cybot", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null
+                SetOriginSprite(28.f, 34.0f);
+                SetScaleSprite(3.0f, 3.0f);
                 break;
             case EnemyType::DRAGONTANK_ENEMY:
-                name = "Dragontank-" + std::to_string(enemyId);
-                SetOriginSprite(20.0f, 38.0f);
-
-                SetScaleSprite(5.5f, 5.5f);
+                strncpy(name, "Dragontank", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null-termination
+                SetScaleSprite( 2.5f,    2.5f);
                 break;
             case EnemyType::GIGAGAIA_ENEMY:
-                name = "Gigagaia-" + std::to_string(enemyId);
+                strncpy(name, "Gigagaia", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null-termination
+                 SetOriginSprite(16.0f, 32.0f);
+                 SetScaleSprite(4.0f, 4.0f);
+                break;
+            case EnemyType::GOBLIN_OGAN_ENEMY:
+                strncpy(name, "GoblinOgan", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null    
                 SetOriginSprite(18.0f, 34.0f);
-                SetScaleSprite(5.0f, 5.0f);
+                SetScaleSprite(3.0f, 3.0f);
                 break;  
             case EnemyType::IMPS_ENEMY:
-                name = "Imp-" + std::to_string(enemyId);
-                SetOriginSprite(17.0f, 32.0f);
-                SetScaleSprite(3.8f, 4.2f);
+                strncpy(name, "Imps", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null
+                    SetOriginSprite(22.0f, 23.0f);
+                SetScaleSprite(3.8f, 3.8f);
                 break;
             case EnemyType::LAVOSCORE_ENEMY:    
-                name = "Lavoscore-" + std::to_string(enemyId);
-                SetOriginSprite(22.0f, 40.0f);
-                SetScaleSprite(6.0f, 6.0f);
+                strncpy(name, "LavosCore", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null
+                SetOriginSprite(43.0f, 63.0f);
+                SetScaleSprite(3.5f, 3.5f);
                 break;
             case EnemyType::MOTHERnBRAIN_ENEMY:
-                name = "MothernBrain-" + std::to_string(enemyId);
+                strncpy(name, "MotherBrain", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null
                 SetOriginSprite(20.0f, 36.0f);
                 SetScaleSprite(5.5f, 5.5f);
                 break;
+
             case EnemyType::MUTANT_ENEMY:
-                name = "Mutant-" + std::to_string(enemyId);
+                strncpy(name, "Mutant", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null-termination    
                 SetOriginSprite(16.0f, 30.0f);
-                SetScaleSprite(4.5f, 4.5f); 
+                SetScaleSprite(3.5f, 3.5f); 
                 break;
             case EnemyType::NIZBELN_ENEMY:
-                name = "Nizbeln-" + std::to_string(enemyId);
-                SetOriginSprite(18.0f, 32.0f);
-                SetScaleSprite(5.0f, 5.0f);
+                strncpy(name, "Nizbeln", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null-termination
+                SetOriginSprite(44.0f, 55.0f);
+                SetScaleSprite(3.f,4.f);
                 break;
             case EnemyType::RATnGERMLIN_ENEMY:
-                name = "RatnGremlin-" + std::to_string(enemyId);
+                strncpy(name, "RatnGremlin", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null-termination
                 SetOriginSprite(14.0f, 28.0f);
-                SetScaleSprite(3.5f, 3.5f);
+                SetScaleSprite(3.0f, 3.0f);
                 break;
             default:
-                name = "Enemy-" + std::to_string(enemyId);  
+                strncpy(name, "Enemy", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null-termination
         }
         setXPos(spawnX);
         setYPos(spawnY);
@@ -159,5 +177,5 @@ public:
     // ── Getters ──────────────────────────────────────────────
     int         getEnemyId()   const { return enemyId; }
     EnemyType   getEnemyType() const { return enemyType; }
-    std::string getName()      const { return name; }
+    
 };

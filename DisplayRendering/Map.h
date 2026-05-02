@@ -8,6 +8,8 @@
         sf::Texture texture;
         sf::Sprite sprite;
         std::string path;
+        
+    void rebind() { sprite.setTexture(texture); }
     };
 class Map
 {
@@ -36,49 +38,42 @@ public:
 bool loadScreens(const std::vector<std::string>& imagePaths)
 {
     screens.clear();
-    int i=0;
+    screens.reserve(imagePaths.size());   // no reallocation
+
     for (const std::string& path : imagePaths)
     {
-        std::cout << "Trying to load: " << path << std::endl;
-
-        screens.emplace_back();
-        Screen& screen = screens.back();
-
+        Screen screen;
         screen.path = path;
 
         if (!screen.texture.loadFromFile(path))
         {
-            std::cerr << "Failed to load map screen: " << path << std::endl;
-            screens.pop_back();
+            std::cerr << "Failed to load: " << path << std::endl;
             return false;
         }
 
         sf::Vector2u texSize = screen.texture.getSize();
-        std::cout << "Loaded: " << path << " size = "
-                  << texSize.x << "x" << texSize.y << std::endl;
-
         if (texSize.x == 0 || texSize.y == 0)
         {
-            std::cerr << "Invalid texture size for: " << path << std::endl;
-            screens.pop_back();
+            std::cerr << "Invalid texture size: " << path << std::endl;
             return false;
         }
 
-        screen.sprite.setTexture(screen.texture);
-
-        float scaleX = gameplayWidth / static_cast<float>(texSize.x);
+        float scaleX = gameplayWidth  / static_cast<float>(texSize.x);
         float scaleY = gameplayHeight / static_cast<float>(texSize.y);
 
-        std::cout << "ScaleX: " << scaleX << " ScaleY: " << scaleY << std::endl;
-
+        screen.sprite.setTexture(screen.texture);
         screen.sprite.setScale(scaleX, scaleY);
-        screen.sprite.setPosition(gameplayX +  i*800, gameplayY);
-        i++;
+        screen.sprite.setPosition(gameplayX, gameplayY);
+
+        screens.push_back(std::move(screen));  //  move into vector AFTER setup
+        screens.back().rebind();               //  rebind AFTER move — sprite now
+                                               //    points to the moved texture
     }
 
     currentScreenIndex = 0;
     return true;
 }
+
 
 
 

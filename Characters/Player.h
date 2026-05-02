@@ -176,6 +176,7 @@ public:
         }
         return false;
     }
+    float getStaminaRecoveryRate() const { return speed; }
 
     // ── Movement ──────────────────────────────────────────────
     bool movement(bool& completed_section)

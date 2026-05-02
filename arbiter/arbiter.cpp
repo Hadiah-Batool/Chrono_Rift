@@ -37,7 +37,8 @@ private:
 
 public:
     // Bind the Arbiter to the shared memory upon creation
-    Arbiter(SharedMemoryBlock* block) {
+    Arbiter(SharedMemoryBlock* block)
+     {
         this->shared_block = block;
     }
 
@@ -249,7 +250,8 @@ int main(int argc, char* argv[]) {
 
     // 5. --- Fork Child Processes ---
     pid_t hip_pid = fork();
-    if (hip_pid == 0) {
+    if (hip_pid == 0) 
+    {
         execl("./hip", "./hip", shm_name, nullptr);
         std::cerr << "Failed to exec HIP process" << std::endl;
         return 1;
