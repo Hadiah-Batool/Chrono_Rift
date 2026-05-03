@@ -254,6 +254,13 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         shared_block->state.players[attacker_id].setStamina(shared_block->state.players[attacker_id].getMaxStamina() / 2);
         break;
 
+    case Action::SETUP_GAME:
+        // create number of players
+        shared_block->state.num_active_players = shared_block->hip_mailbox.target_id;
+        for(int i = 0; i < shared_block->state.num_active_players; i++){
+            shared_block->state.players[i] = Player(shared_block->hip_mailbox.type);
+        }
+
     default:
         break;
     }
@@ -347,7 +354,35 @@ int main(int argc, char* argv[]) {
     pthread_create(&stamina_accumalator, NULL, stamina_recovery, shared_block);
     pthread_create(&deadlock_detector, NULL, deadlock_detection, NULL);
 
-    std::cout << "[ARBITER] System Kernel Online. Commencing Simulation." << std::endl;
+    std::cout << "[ARBITER] System Kernel Online. Entering Setup Phase." << std::endl;
+
+    // ---------------------------------------------------------
+    // 6.5 --- Game Setup Phase (Wait for HIP to define players)
+    // ---------------------------------------------------------
+    pthread_mutex_lock(&shared_block->global_mutex);
+
+    // Force the first turn to the HIP so it can prompt the user
+    shared_block->state.is_player_turn = true;
+    shared_block->state.current_turn_owner_id = 0; // Arbitrary ID for setup phase
+
+    // Wake up the children (HIP will see it's a player turn and proceed)
+    pthread_cond_broadcast(&shared_block->turn_condition);
+
+    // Wait for the HIP to send the SETUP request
+    while (!shared_block->hip_mailbox.is_ready) {
+        pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
+    }
+
+    std::cout << "[ARBITER] HIP sent setup request. Delegating to handler..." << std::endl;
+    // Pass the setup directly to your existing handler
+    handle_player_action(shared_block->hip_mailbox, shared_block);
+
+    // Flush the mailbox so it is clean for Turn 1
+    shared_block->hip_mailbox.is_ready = false;
+    pthread_mutex_unlock(&shared_block->global_mutex);
+
+    std::cout << "[ARBITER] Setup Complete. Commencing Main Simulation." << std::endl;
+
 
     // 7. --- The Main Arbiter Event Loop ---
     while (shared_block->state.game_running) {
@@ -376,45 +411,41 @@ int main(int argc, char* argv[]) {
                 }
 
                 std::cout << "[ARBITER] Player " << turn_index << " executed action!" << std::endl;
-                // TODO: HIP Action Math
 
                 handle_player_action(shared_block->hip_mailbox, shared_block);
-                // shared_block->state.players[turn_index].setStamina(0);
 
-            }else {
-
+            } else {
                 struct timespec ts;
                 clock_gettime(CLOCK_REALTIME, &ts);
                 ts.tv_sec += 3; // Exactly 3 seconds from now
 
                 int wait_result = 0;
 
-                // 2. Wait for mailbox OR timeout
+                // Wait for mailbox OR timeout
                 while (!shared_block->asp_mailbox.is_ready && wait_result != ETIMEDOUT) {
                     wait_result = pthread_cond_timedwait(&shared_block->turn_condition, &shared_block->global_mutex, &ts);
                 }
 
-                // 3. Handle the Timeout Scenario
+                int enemy_actual_index = turn_index - shared_block->state.num_active_players;
+
+                // Handle the Timeout Scenario by forging a SKIP action
                 if (wait_result == ETIMEDOUT && !shared_block->asp_mailbox.is_ready) {
-                    int enemy_actual_index = turn_index - shared_block->state.num_active_players;
                     std::cout << "[ARBITER] Enemy " << enemy_actual_index << " timed out! Forcing SKIP." << std::endl;
 
-                    // Force skip: 50% stamina
-                    shared_block->state.enemies[enemy_actual_index].setStamina(shared_block->state.enemies[enemy_actual_index].getMaxStamina() / 2);
-
-                    // Flush mailbox just in case
-                    shared_block->asp_mailbox.is_ready = false;
-                    continue; // Skip the rest of the loop and go to next turn
+                    // forges it on the spot
+                    shared_block->asp_mailbox.requesting_entity_id = turn_index;
+                    shared_block->asp_mailbox.action_type = Action::SKIP;
+                    // No target or weapon needed for skip
+                } else {
+                    // Normal Execution
+                    std::cout << "[ARBITER] Enemy " << enemy_actual_index << " executed action!" << std::endl;
                 }
 
-                // 4. Normal Execution (If they responded in time)
-                int enemy_actual_index = turn_index - shared_block->state.num_active_players;
-                std::cout << "[ARBITER] Enemy " << enemy_actual_index << " executed action!" << std::endl;
-
+                // Pass the action (whether it was real or a forced timeout skip) to your handler
                 handle_enemy_action(shared_block->asp_mailbox, shared_block);
             }
 
-            // Check win/loss/level-up conditions here!
+            // Check win/loss/level-up conditions pleaj :D 😟
         }
 
         pthread_mutex_unlock(&shared_block->global_mutex);

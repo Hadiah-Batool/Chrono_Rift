@@ -10,17 +10,12 @@
 #include "Inventory.h"
 #include "Backpack.h"
 #include "../resources/shared_mem_abs.h"
+#include "../shared/shared_types.h"
 
 using std::vector;
 using std::pair;
 
-enum class PlayerType
-{
-    CHRONO,
-    FROG,
-    MARLE,
-    MAGUS
-};
+
 
 class Player : public Character
 {
@@ -40,6 +35,43 @@ public:
         : Character(CharacterType::PLAYER), playerType(type)
     {
         nextWeaponId = 1;
+        setAttributes();
+    }
+
+    void setAttributes()
+    {
+        switch (playerType)
+        {
+            case PlayerType::CHRONO:
+                maxHp = 150;
+                demage = 35;
+                MaxStamina = 100;
+                speed = 20;
+                break;
+            case PlayerType::FROG:
+                maxHp = 110;
+                demage = 32;
+                MaxStamina = 110;
+                speed = 23;
+                break;
+            case PlayerType::MARLE:
+                maxHp = 170;
+                demage = 37;
+                MaxStamina = 80;
+                speed = 14;
+                break;
+            case PlayerType::MAGUS:
+                maxHp = 90;
+                demage = 30;
+                MaxStamina = 130;
+                speed = 28;
+                break;
+            default:
+                // Should not happen
+                break;
+        }
+        Hp = maxHp;
+        stamina = MaxStamina;
     }
 
     // ── Roll stats ────────────────────────────────────────────
@@ -180,7 +212,7 @@ public:
         }
         return false;
     }
-    
+
 
     // ── Movement ──────────────────────────────────────────────
     bool movement(bool& completed_section)
@@ -227,5 +259,5 @@ public:
         return path_to_follow;
     }
     //ATTACK EM BEES
-    
+
 };

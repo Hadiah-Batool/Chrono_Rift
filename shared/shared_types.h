@@ -7,13 +7,23 @@
 #define ACTION_LOG_SIZE 10      // stores last 10 actions
 #define ACTION_MSG_LEN  128     // max chars per message
 
+
+enum class PlayerType
+{
+    CHRONO = 0,
+    FROG   = 1,
+    MARLE  = 2,
+    MAGUS  = 3
+};
+
 enum class Action {
     STRIKE      = 0,
     EXHAUST     = 1,
     USE_WEAPON  = 2,
     SWAP_IN     = 3,
     HEAL        = 4,
-    SKIP        = 5
+    SKIP        = 5,
+    SETUP_GAME =  6
 };
 
 struct ActionLog {
@@ -38,6 +48,7 @@ struct ActionRequest {
     int weapon_id;            // Which weapon to use (if applicable)
 
     bool is_ready;            // FLAG: HIP/ASP sets to TRUE when finished writing
+    PlayerType type;          // playertype in case need to make players
 };
 
 // ---------------------------------------------------------
