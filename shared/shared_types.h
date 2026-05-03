@@ -78,6 +78,9 @@ struct GameState {
     int sublevel;
     int enemies_defeated;
 
+    bool haslevelended;
+    bool hassublevelended;
+
     struct special_weapon {
         int solar_core_holder;   // -1 if free, otherwise entity ID
         int lunar_blade_holder;  // -1 if free

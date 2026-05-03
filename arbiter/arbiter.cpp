@@ -162,51 +162,6 @@ void* deadlock_detection(void* arg)
 }
 
 
-// pick the first player/enemy that has full stamina, if no one has full stamina, return nullptr
-// randomly chooses what to find in first, player or enemy
-void find_turn(std::array<Player, 4>* players_arr, int num_active_players,
-               std::array<Enemy, 9>* enemies_arr, int num_active_enemies,
-               int* out_turn_index, bool* out_turn){
-
-    *out_turn_index = -1;
-    bool check_players_first = rand() % 2 == 0;
-    if(check_players_first){
-        for(int i = 0; i < num_active_players; ++i){
-            if((*players_arr)[i].getStamina() >= (*players_arr)[i].getMaxStamina()){
-                *out_turn_index = i;
-                *out_turn = true;
-                return;
-            }
-        }
-        for(int i = 0; i < num_active_enemies; ++i){
-            if((*enemies_arr)[i].getStamina() >= (*enemies_arr)[i].getMaxStamina()){
-                *out_turn_index = num_active_players + i;
-                *out_turn = false;
-                return;
-            }
-        }
-    }
-
-    else {
-        for(int i = 0; i < num_active_enemies; ++i){
-            if((*enemies_arr)[i].getStamina() >= (*enemies_arr)[i].getMaxStamina()){
-                *out_turn_index = num_active_players + i;
-                *out_turn = false;
-                return;
-            }
-        }
-         for(int i = 0; i < num_active_players; ++i){
-            if((*players_arr)[i].getStamina() >= (*players_arr)[i].getMaxStamina()){
-                *out_turn_index = i;
-                *out_turn = true;
-                return;
-            }
-        }
-    }
-
-}
-
-
 
 
 void handle_player_action(const ActionRequest& request, SharedMemoryBlock* shared_block) {
@@ -289,186 +244,163 @@ void handle_enemy_action(const ActionRequest& request, SharedMemoryBlock* shared
 }
 
 
+
 int main(int argc, char* argv[]) {
-    // 1. Seed the Random Number Generator
+    // 1. Setup
     unsigned int seed = std::hash<std::string>{}("24I0607");
     srand(seed);
-
     pthread_t stamina_accumalator, deadlock_detector;
 
-    // 2. --- Create Shared Memory for the Master Block ---
+    // 2. Shared Memory
     const char* shm_name = "/game_state_shm";
-    shm_unlink(shm_name); // Clean up any zombie memory from previous crashes
-
-    // Instantiate your SharedMem wrapper class to handle creation and mapping securely
+    shm_unlink(shm_name);
     SharedMem master_shm(shm_name, sizeof(SharedMemoryBlock), true, true);
-
-    // Cast the raw pointer directly to our SharedMemoryBlock
     SharedMemoryBlock* shared_block = static_cast<SharedMemoryBlock*>(master_shm.getPtr());
 
-    // 3. --- Initialize the Process-Shared Mutexes and CVs ---
+    // 3. Sync Primitives
     pthread_mutexattr_t mutex_attr;
     pthread_mutexattr_init(&mutex_attr);
     pthread_mutexattr_setpshared(&mutex_attr, PTHREAD_PROCESS_SHARED);
-
     pthread_mutex_init(&shared_block->global_mutex, &mutex_attr);
     pthread_mutex_init(&shared_block->resource_table_mutex, &mutex_attr);
-    pthread_mutexattr_destroy(&mutex_attr);
 
     pthread_condattr_t cond_attr;
     pthread_condattr_init(&cond_attr);
     pthread_condattr_setpshared(&cond_attr, PTHREAD_PROCESS_SHARED);
     pthread_cond_init(&shared_block->turn_condition, &cond_attr);
-    pthread_condattr_destroy(&cond_attr);
 
-    // 4. --- Setup Initial Game State & Arbiter ---
+    // 4. Initial State
     shared_block->state.game_running = true;
     shared_block->state.level = 1;
     shared_block->state.sublevel = 1;
-    shared_block->state.enemies_defeated = 0;
-    shared_block->state.current_turn_owner_id = -1;
-    shared_block->hip_mailbox.is_ready = false;
-    shared_block->asp_mailbox.is_ready = false;
-
-    // Instantiate Arbiter and initialize the first level's entities
     Arbiter arbiter(shared_block);
-    arbiter.initialize_entities(240607, 7, 7);
 
-    // 5. --- Fork Child Processes ---
+    // 5. Processes
     pid_t hip_pid = fork();
-    if (hip_pid == 0)
-    {
-        execl("./hip", "./hip", shm_name, nullptr);
-        std::cerr << "Failed to exec HIP process" << std::endl;
-        return 1;
-    }
-
+    if (hip_pid == 0) { execl("./hip", "./hip", shm_name, nullptr); return 1; }
     pid_t asp_pid = fork();
-    if (asp_pid == 0) {
-        execl("./asp", "./asp", shm_name, nullptr);
-        std::cerr << "Failed to exec ASP process" << std::endl;
-        return 1;
-    }
+    if (asp_pid == 0) { execl("./asp", "./asp", shm_name, nullptr); return 1; }
 
-    // 6. --- Ignite Background Threads ---
+    // 6. Threads
     pthread_create(&stamina_accumalator, NULL, stamina_recovery, shared_block);
     pthread_create(&deadlock_detector, NULL, deadlock_detection, NULL);
 
-    std::cout << "[ARBITER] System Kernel Online. Entering Setup Phase." << std::endl;
-
-    // ---------------------------------------------------------
-    // 6.5 --- Game Setup Phase (Wait for HIP to define players)
-    // ---------------------------------------------------------
+    // --- PHASE 6.5: BOOTSTRAP (Setup Players) ---
+    // (HIP still needs to tell us how many players to make on boot)
     pthread_mutex_lock(&shared_block->global_mutex);
-
-    // Force the first turn to the HIP so it can prompt the user
-    shared_block->state.is_player_turn = true;
-    shared_block->state.current_turn_owner_id = 0; // Arbitrary ID for setup phase
-
-    // Wake up the children (HIP will see it's a player turn and proceed)
+    shared_block->state.current_turn_owner_id = -2;
     pthread_cond_broadcast(&shared_block->turn_condition);
-
-    // Wait for the HIP to send the SETUP request
     while (!shared_block->hip_mailbox.is_ready) {
         pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
     }
-
-    std::cout << "[ARBITER] HIP sent setup request. Delegating to handler..." << std::endl;
-    // Pass the setup directly to your existing handler
     handle_player_action(shared_block->hip_mailbox, shared_block);
 
-    // Flush the mailbox so it is clean for Turn 1
+    // Initial Level 1 Enemy Boot
+    arbiter.initialize_entities(240607, 7, 7);
+
     shared_block->hip_mailbox.is_ready = false;
     pthread_mutex_unlock(&shared_block->global_mutex);
 
-    std::cout << "[ARBITER] Setup Complete. Commencing Main Simulation." << std::endl;
-
-
-    // 7. --- The Main Arbiter Event Loop ---
+    // 7. MAIN EVENT LOOP
     while (shared_block->state.game_running) {
         pthread_mutex_lock(&shared_block->global_mutex);
 
-        int turn_index = -1;
-        bool is_player = false;
+        // ==========================================================
+        // INTERCEPT BLOCK: Level vs. Sublevel Progression
+        // ==========================================================
+        if (shared_block->state.haslevelended || shared_block->state.hassublevelended) {
 
-        // Step A: Find who goes next
-        arbiter.find_turn(&turn_index, &is_player);
+            // PATH A: A Full Level Ended -> Ask HIP for Player Info
+            if (shared_block->state.haslevelended) {
+                std::cout << "[ARBITER] Level Cleared! Awaiting HIP for Player data..." << std::endl;
 
-        if (turn_index != -1) {
-            // Step B: Assign the turn
-            shared_block->state.current_turn_owner_id = turn_index;
-            shared_block->state.is_player_turn = is_player;
+                // 1. Wake the HIP up using the special -2 ID
+                shared_block->state.current_turn_owner_id = -2;
+                shared_block->hip_mailbox.is_ready = false;
+                pthread_cond_broadcast(&shared_block->turn_condition);
 
-            // Step C: Flush mailboxes and wake up children
-            shared_block->hip_mailbox.is_ready = false;
-            shared_block->asp_mailbox.is_ready = false;
-            pthread_cond_broadcast(&shared_block->turn_condition);
-
-            // Step D: Wait for response and execute
-            if (is_player) {
+                // 2. Go to sleep until HIP provides the player info
                 while (!shared_block->hip_mailbox.is_ready) {
                     pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
                 }
 
-                std::cout << "[ARBITER] Player " << turn_index << " executed action!" << std::endl;
-
+                // 3. Pass the mailbox to your handler to do the player info shi
                 handle_player_action(shared_block->hip_mailbox, shared_block);
 
+                // Advance level counters
+                shared_block->state.level++;
+                shared_block->state.sublevel = 1;
+            }
+            // PATH B: Only a Sublevel Ended -> No HIP needed, just advance
+            else {
+                std::cout << "[ARBITER] Sublevel Cleared! Generating next wave instantly..." << std::endl;
+                shared_block->state.sublevel++;
+            }
+
+            // ==========================================================
+            // YOUR CUSTOM ENEMY CREATION LOGIC GOES HERE
+            // (This runs for both new Levels AND new Sublevels)
+            // ==========================================================
+            arbiter.initialize_entities(240607, 7, 7);
+
+            // Reset player stamina for the new fight
+            for(int i = 0; i < shared_block->state.num_active_players; ++i) {
+                 shared_block->state.players[i].setStamina(0);
+            }
+
+            // Clean up flags and mailboxes for the next loop
+            shared_block->state.haslevelended = false;
+            shared_block->state.hassublevelended = false;
+            shared_block->hip_mailbox.is_ready = false;
+
+            pthread_mutex_unlock(&shared_block->global_mutex);
+            continue; // Jump to Turn 1 of the new wave
+        }
+        // ==========================================================
+
+        // --- NORMAL SCHEDULING ---
+        int turn_index = -1;
+        bool is_player = false;
+        arbiter.find_turn(&turn_index, &is_player);
+
+        if (turn_index != -1) {
+            shared_block->state.current_turn_owner_id = turn_index;
+            shared_block->state.is_player_turn = is_player;
+            pthread_cond_broadcast(&shared_block->turn_condition);
+
+            if (is_player) {
+                while (!shared_block->hip_mailbox.is_ready)
+                    pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
+                handle_player_action(shared_block->hip_mailbox, shared_block);
             } else {
                 struct timespec ts;
                 clock_gettime(CLOCK_REALTIME, &ts);
-                ts.tv_sec += 3; // Exactly 3 seconds from now
+                ts.tv_sec += 3;
+                int res = 0;
+                while (!shared_block->asp_mailbox.is_ready && res != ETIMEDOUT)
+                    res = pthread_cond_timedwait(&shared_block->turn_condition, &shared_block->global_mutex, &ts);
 
-                int wait_result = 0;
-
-                // Wait for mailbox OR timeout
-                while (!shared_block->asp_mailbox.is_ready && wait_result != ETIMEDOUT) {
-                    wait_result = pthread_cond_timedwait(&shared_block->turn_condition, &shared_block->global_mutex, &ts);
-                }
-
-                int enemy_actual_index = turn_index - shared_block->state.num_active_players;
-
-                // Handle the Timeout Scenario by forging a SKIP action
-                if (wait_result == ETIMEDOUT && !shared_block->asp_mailbox.is_ready) {
-                    std::cout << "[ARBITER] Enemy " << enemy_actual_index << " timed out! Forcing SKIP." << std::endl;
-
-                    // forges it on the spot
+                if (res == ETIMEDOUT && !shared_block->asp_mailbox.is_ready) {
+                    shared_block->asp_mailbox.action_type = Action::SKIP; // FORCED SKIP
                     shared_block->asp_mailbox.requesting_entity_id = turn_index;
-                    shared_block->asp_mailbox.action_type = Action::SKIP;
-                    // No target or weapon needed for skip
-                } else {
-                    // Normal Execution
-                    std::cout << "[ARBITER] Enemy " << enemy_actual_index << " executed action!" << std::endl;
                 }
-
-                // Pass the action (whether it was real or a forced timeout skip) to your handler
                 handle_enemy_action(shared_block->asp_mailbox, shared_block);
             }
-
-            // Check win/loss/level-up conditions pleaj :D 😟
         }
-
         pthread_mutex_unlock(&shared_block->global_mutex);
         usleep(10000);
     }
 
-    // 8. --- Graceful Teardown ---
-    std::cout << "[ARBITER] Simulation Terminated. Cleaning up resources..." << std::endl;
-
+    // 8. Cleanup
     kill(hip_pid, SIGTERM);
     kill(asp_pid, SIGTERM);
     waitpid(hip_pid, NULL, 0);
     waitpid(asp_pid, NULL, 0);
-
     pthread_cancel(stamina_accumalator);
     pthread_cancel(deadlock_detector);
-
-    // Unmap and unlink memory
     pthread_mutex_destroy(&shared_block->global_mutex);
     pthread_mutex_destroy(&shared_block->resource_table_mutex);
     pthread_cond_destroy(&shared_block->turn_condition);
-
-    // Note: No need for munmap or shm_unlink here because the master_shm destructor handles it automatically.
 
     return 0;
 }
