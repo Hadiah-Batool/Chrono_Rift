@@ -19,6 +19,7 @@
 #include <sys/mman.h>   // for mmap
 #include <cstring>      // for strerror
 #include "../shared/shared_types.h"
+#include <time.h>
 
 using std::vector;
 using std::cout;
@@ -26,6 +27,9 @@ using std::endl;
 using std::mutex;
 using std::condition_variable;
 using std::array;
+
+
+#define time_of_response 3 // 3 seconds to make move
 
 
 
@@ -203,6 +207,81 @@ void find_turn(std::array<Player, 4>* players_arr, int num_active_players,
 }
 
 
+
+
+void handle_player_action(const ActionRequest& request, SharedMemoryBlock* shared_block) {
+    int attacker_id = shared_block->hip_mailbox.requesting_entity_id;
+    int target_id   = shared_block->hip_mailbox.target_id;
+
+    switch (request.action_type)
+    {
+    case Action::STRIKE:
+        int damage = shared_block->state.players[attacker_id].getDemage();
+
+        shared_block->state.enemies[target_id].TakeDamage(damage);
+        shared_block->state.players[attacker_id].ResetStamina();
+        break;
+
+    case Action::EXHAUST:
+        int damage = shared_block->state.players[attacker_id].getDemage();
+        int current_stamina = shared_block->state.enemies[target_id].getStamina();
+        shared_block->state.enemies[target_id].setStamina(damage > current_stamina ? 0 : current_stamina - damage);
+        shared_block->state.players[attacker_id].ResetStamina();
+        break;
+
+    case Action::USE_WEAPON:
+        int weapon_id = shared_block->hip_mailbox.weapon_id;
+        int weapon_damage = shared_block->state.players[attacker_id].getInventory().getEquippedWeapons().at(weapon_id).getDamage();// assuming this correctly retrieves the weapon damage
+        shared_block->state.enemies[target_id].TakeDamage(weapon_damage);
+        shared_block->state.players[attacker_id].ResetStamina();
+        break;
+
+    case Action::SWAP_IN:
+        int weapon_id = shared_block->hip_mailbox.weapon_id;
+        shared_block->state.players[attacker_id].swapInFromBackpack(weapon_id); // assuming this correctly swaps the weapon
+        shared_block->state.players[attacker_id].ResetStamina();
+        break;
+
+    case Action::HEAL:
+        int current_hp = shared_block->state.players[attacker_id].getHp();
+        // Heal 10% of max HP, but not above max HP
+        int heal_amount = shared_block->state.players[attacker_id].getMaxHp() / 10;
+        shared_block->state.players[attacker_id].RegainHealth(heal_amount);
+        shared_block->state.players[attacker_id].ResetStamina();
+        break;
+
+    case Action::SKIP:
+        shared_block->state.players[attacker_id].setStamina(shared_block->state.players[attacker_id].getMaxStamina() / 2);
+        break;
+
+    default:
+        break;
+    }
+}
+
+void handle_enemy_action(const ActionRequest& request, SharedMemoryBlock* shared_block) {
+    int attacker_id = shared_block->asp_mailbox.requesting_entity_id;
+    int target_id   = shared_block->asp_mailbox.target_id;
+
+    switch (request.action_type)
+    {
+    case Action::STRIKE:
+        int damage = shared_block->state.enemies[attacker_id].getDemage();
+
+        shared_block->state.players[target_id].TakeDamage(damage);
+        shared_block->state.enemies[attacker_id].ResetStamina();
+        break;
+
+    case Action::SKIP:
+        shared_block->state.enemies[attacker_id].setStamina(shared_block->state.enemies[attacker_id].getMaxStamina() / 2);
+        break;
+
+    default:
+        break;
+    }
+}
+
+
 int main(int argc, char* argv[]) {
     // 1. Seed the Random Number Generator
     unsigned int seed = std::hash<std::string>{}("24I0607");
@@ -250,7 +329,7 @@ int main(int argc, char* argv[]) {
 
     // 5. --- Fork Child Processes ---
     pid_t hip_pid = fork();
-    if (hip_pid == 0) 
+    if (hip_pid == 0)
     {
         execl("./hip", "./hip", shm_name, nullptr);
         std::cerr << "Failed to exec HIP process" << std::endl;
@@ -298,20 +377,44 @@ int main(int argc, char* argv[]) {
 
                 std::cout << "[ARBITER] Player " << turn_index << " executed action!" << std::endl;
                 // TODO: HIP Action Math
-                shared_block->state.players[turn_index].setStamina(0);
 
-            } else {
-                while (!shared_block->asp_mailbox.is_ready) {
-                    pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
+                handle_player_action(shared_block->hip_mailbox, shared_block);
+                // shared_block->state.players[turn_index].setStamina(0);
+
+            }else {
+
+                struct timespec ts;
+                clock_gettime(CLOCK_REALTIME, &ts);
+                ts.tv_sec += 3; // Exactly 3 seconds from now
+
+                int wait_result = 0;
+
+                // 2. Wait for mailbox OR timeout
+                while (!shared_block->asp_mailbox.is_ready && wait_result != ETIMEDOUT) {
+                    wait_result = pthread_cond_timedwait(&shared_block->turn_condition, &shared_block->global_mutex, &ts);
                 }
 
+                // 3. Handle the Timeout Scenario
+                if (wait_result == ETIMEDOUT && !shared_block->asp_mailbox.is_ready) {
+                    int enemy_actual_index = turn_index - shared_block->state.num_active_players;
+                    std::cout << "[ARBITER] Enemy " << enemy_actual_index << " timed out! Forcing SKIP." << std::endl;
+
+                    // Force skip: 50% stamina
+                    shared_block->state.enemies[enemy_actual_index].setStamina(shared_block->state.enemies[enemy_actual_index].getMaxStamina() / 2);
+
+                    // Flush mailbox just in case
+                    shared_block->asp_mailbox.is_ready = false;
+                    continue; // Skip the rest of the loop and go to next turn
+                }
+
+                // 4. Normal Execution (If they responded in time)
                 int enemy_actual_index = turn_index - shared_block->state.num_active_players;
                 std::cout << "[ARBITER] Enemy " << enemy_actual_index << " executed action!" << std::endl;
-                // TODO: ASP Action Math
-                shared_block->state.enemies[enemy_actual_index].setStamina(0);
+
+                handle_enemy_action(shared_block->asp_mailbox, shared_block);
             }
 
-            // Step E: Check win/loss/level-up conditions here!
+            // Check win/loss/level-up conditions here!
         }
 
         pthread_mutex_unlock(&shared_block->global_mutex);
