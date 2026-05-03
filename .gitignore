@@ -6,6 +6,7 @@ asp
 # Object files
 *.o
 *.out
+*.exe
 
 # VS Code
 .vscode/

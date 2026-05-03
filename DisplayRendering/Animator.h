@@ -5,7 +5,12 @@
 #include <iostream>
 
 using std::string, std::vector, std::cout, std::endl;
-
+struct FrameData
+{
+    int   x, y, w, h;
+    float duration;
+    float centerX, centerY;
+};
 class AnimationFrame
 {
 private:
@@ -113,6 +118,14 @@ public:
         sprite.setTextureRect(frames[currentFrame].getFrame());
         sprite.setOrigin(frames[currentFrame].getCenter());
     }
+    // Add this inside the Animation class, after applyToSprite()
+    void draw(sf::RenderWindow& window, sf::Sprite& sprite)
+    {
+        if (frames.empty()) return;
+        applyToSprite(sprite);
+        window.draw(sprite);
+    }
+
 
     void reset()
     {
@@ -189,4 +202,5 @@ public:
         currentFrame = 0;
         isFinished = false;
     }
+    
 };
