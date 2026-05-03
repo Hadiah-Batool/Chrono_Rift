@@ -16,14 +16,6 @@
 #include "../DisplayRendering/render.h"
 
 
-enum class Action {
-    STRIKE      = 0,
-    EXHAUST     = 1,
-    USE_WEAPON  = 2,
-    SWAP_IN     = 3,
-    HEAL        = 4,
-    SKIP        = 5
-};
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ActionSlot — one per player
@@ -87,7 +79,7 @@ static void pushLog(SharedMemoryBlock* shm, const char* fmt, ...)
 //  submitAction
 //  Called by renderer on keypress — posts to the ACTIVE player's slot only.
 // ─────────────────────────────────────────────────────────────────────────────
-static void submitAction(HIPContext* ctx, int action, int targetIdx, int weaponIdx = -1)
+static void submitAction(HIPContext* ctx, Action action, int targetIdx, int weaponIdx = -1)
 {
     pthread_mutex_lock(&ctx->shm->global_mutex);
     bool isPlayerTurn = ctx->shm->state.is_player_turn;
@@ -110,7 +102,7 @@ static void submitAction(HIPContext* ctx, int action, int targetIdx, int weaponI
 //  waitForAction
 // ─────────────────────────────────────────────────────────────────────────────
 static void waitForAction(ActionSlot* slot, std::atomic<bool>* running,
-                          int& action, int& targetIdx, int& weaponIdx)
+                          Action& action, int& targetIdx, int& weaponIdx)
 {
     pthread_mutex_lock(&slot->mutex);
     while (!slot->ready && running->load())
@@ -152,7 +144,8 @@ static void* playerThreadFunc(void* arg)
         pthread_mutex_unlock(&ctx->slot->mutex);
 
         // 3. Wait for renderer keypress
-        int action, targetIdx, weaponIdx;
+        Action action;
+         int targetIdx, weaponIdx;
         waitForAction(ctx->slot, ctx->running, action, targetIdx, weaponIdx);
         if (!ctx->running->load()) break;
 
@@ -163,7 +156,7 @@ static void* playerThreadFunc(void* arg)
         shm->hip_mailbox.target_id            = targetIdx;
         shm->hip_mailbox.weapon_id            = weaponIdx;
         shm->hip_mailbox.is_ready             = true;
-        pushLog(shm, "Player %d act=%d tgt=%d wpn=%d", me, action, targetIdx, weaponIdx);
+        pushLog(shm, "Player %d act=%d tgt=%d wpn=%d", me, static_cast<int>(action), targetIdx, weaponIdx);
         pthread_cond_broadcast(&shm->turn_condition);
         pthread_mutex_unlock(&shm->global_mutex);
     }
@@ -184,7 +177,7 @@ static void spawnPlayerThreads(HIPContext* ctx)
         ActionSlot& slot = ctx->slots[i];
         pthread_mutex_init(&slot.mutex, nullptr);
         pthread_cond_init (&slot.cond,  nullptr);
-        slot.ready = false; slot.action = ACTION_SKIP;
+        slot.ready = false; slot.action = Action::SKIP;
         slot.targetIdx = -1; slot.weaponIdx = -1;
 
         PlayerThreadCtx& pctx = ctx->playerCtxs[i];
@@ -287,7 +280,7 @@ int main(int argc, char* argv[])
     //   S          → ACTION_SWAP_IN
     //   Left/Right → renderer cycles enemy targets  (tracks internally)
     //   Up/Down    → renderer cycles weapon slots   (tracks internally)
-    renderer.setActionCallback([&ctx](int act, int tgt, int wpn)
+    renderer.setActionCallback([&ctx](Action act, int tgt, int wpn)
     {
         submitAction(&ctx, act, tgt, wpn);
     });

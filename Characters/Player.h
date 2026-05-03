@@ -26,7 +26,7 @@ class Player : public Character
 {
 private:
     PlayerType   playerType;
-    std::string  name;
+    char name[64];
 
     Inventory inventory;
     Backpack  backpack;
@@ -70,25 +70,29 @@ public:
         switch (playerType)
         {
             case PlayerType::CHRONO:
-                name = "Chrono";
+                strncpy(name, "Chrono", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null-termination
                 SetOriginSprite(16.0f, 35.0f);
                 SetScaleSprite(5.0f, 4.0f);
                 break;
 
             case PlayerType::FROG:
-                name = "Frog";
+                strncpy(name, "Frog", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null-termination
                 SetOriginSprite(16.0f, 24.0f);
                 SetScaleSprite(5.0f, 5.8f);
                 break;
 
             case PlayerType::MARLE:
-                name = "Marle";
+                strncpy(name, "Marle", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null-termination
                 SetOriginSprite(16.0f, 35.0f);
                 SetScaleSprite(5.0f, 4.0f);
                 break;
 
             case PlayerType::MAGUS:
-                name = "Magus";
+                strncpy(name, "Magus", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null-termination
                 SetOriginSprite(18.0f, 32.0f);
                 SetScaleSprite(4.4f, 4.375f);
                 break;
@@ -176,7 +180,7 @@ public:
         }
         return false;
     }
-    float getStaminaRecoveryRate() const { return speed; }
+    
 
     // ── Movement ──────────────────────────────────────────────
     bool movement(bool& completed_section)
