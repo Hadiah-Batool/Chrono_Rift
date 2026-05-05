@@ -201,10 +201,7 @@ public:
     int   getRollFull()    const { return rollFull; }
     int   getRollLastDig() const { return rollLastDig; }
     int   getRollLastTwo() const { return rollLastTwo; }
-<<<<<<< Updated upstream
-};
-=======
+
     float getScaleX()       const { return sprite.getScale().x; }
     float getScaleY()       const { return sprite.getScale().y; }
 };
->>>>>>> Stashed changes

@@ -13,7 +13,8 @@ enum class PlayerType
     CHRONO = 0,
     FROG   = 1,
     MARLE  = 2,
-    MAGUS  = 3
+    MAGUS  = 3,
+    NONE =4
 };
 
 enum class Action {
@@ -41,14 +42,15 @@ struct Stamina {
 // ---------------------------------------------------------
 // 1. THE MAILBOX (Written by HIP/ASP, Read by Arbiter)
 // ---------------------------------------------------------
-struct ActionRequest {
+struct ActionRequest 
+{
     int requesting_entity_id; // The index of the player/enemy taking the action
     Action action_type;          // e.g., Action::SKIP, Action::STRIKE, etc.
-    int target_id;            // Which enemy/player is being attacked
+    int target_id;            // Which enemy/player is being attacked or number of players in case of SETUP_GAME
     int weapon_id;            // Which weapon to use (if applicable)
 
     bool is_ready;            // FLAG: HIP/ASP sets to TRUE when finished writing
-    PlayerType type;          // playertype in case need to make players
+    PlayerType types[4];          // playertype in case need to make players
 };
 
 // ---------------------------------------------------------
@@ -62,6 +64,9 @@ struct GameState {
     // --- Entity Arrays ---
     int num_active_players;
     std::array<Player, 4> players;
+
+    int total_enemies_spawned;
+    int total_players_spawned;
 
     int num_active_enemies;
     std::array<Enemy, 9> enemies;

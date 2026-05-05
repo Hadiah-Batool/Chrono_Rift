@@ -228,7 +228,7 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         // create number of players
         shared_block->state.num_active_players = shared_block->hip_mailbox.target_id;
         for(int i = 0; i < shared_block->state.num_active_players; i++){
-            shared_block->state.players[i] = Player(shared_block->hip_mailbox.type);
+            shared_block->state.players[i] = Player(shared_block->hip_mailbox.types[i]);
         }
 
     default:
@@ -270,7 +270,8 @@ bool need_more_enemies(const SharedMemoryBlock* shared_block) {
 }
 
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[]) 
+{
     // 1. Setup
     unsigned int seed = std::hash<std::string>{}("24I0607");
     srand(seed);

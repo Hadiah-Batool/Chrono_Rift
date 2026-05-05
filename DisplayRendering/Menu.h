@@ -5,6 +5,7 @@
 #include <string>
 #include <algorithm>
 #include <functional>
+#include <array>
 
 using std::vector;
 using std::string;
@@ -27,11 +28,28 @@ struct LevelDescription
 
 struct PartyConfig
 {
-    vector<PlayerType> players;
+    std::array<PlayerType, 4> players = {
+        PlayerType::NONE, PlayerType::NONE,
+        PlayerType::NONE, PlayerType::NONE
+    };
     int  selectedLevel = 1;
-    bool valid()      const { return !players.empty(); }
-    int  numPlayers() const { return (int)players.size(); }
+
+    bool valid() const
+    {
+        for (auto& p : players)
+            if (p != PlayerType::NONE) return true;
+        return false;
+    }
+
+    int numPlayers() const
+    {
+        int n = 0;
+        for (auto& p : players)
+            if (p != PlayerType::NONE) n++;
+        return n;
+    }
 };
+
 
 namespace MenuColour
 {
@@ -445,7 +463,7 @@ void tickLevelSelect(sf::Vector2i mouse, bool clicked)
                  backHover ? MenuColour::TxtHover : MenuColour::TxtNormal);
         if (backHover && clicked)
         {
-            m_result.players.clear();
+            m_result.players.fill(PlayerType::NONE);  // reset to default (not really needed)
             m_screen = MenuScreen::LEVEL_SELECT;
         }
 
@@ -608,15 +626,27 @@ if (m_charAssets[i].loaded)
     }
 
     // ── Toggle on click ───────────────────────────────────────────────────
-    if (over && clicked)
+// ── Toggle on click ───────────────────────────────────────────────────
+if (over && clicked)
+{
+    auto it = std::find(m_result.players.begin(),
+                        m_result.players.end(), t);
+    if (it != m_result.players.end())
     {
-        auto it = std::find(m_result.players.begin(),
-                            m_result.players.end(), t);
-        if (it != m_result.players.end())
-            m_result.players.erase(it);
-        else if ((int)m_result.players.size() < 4)
-            m_result.players.push_back(t);
+        // Already selected — deselect
+        *it = PlayerType::NONE;
     }
+    else
+    {
+        // Find first empty slot
+        auto empty = std::find(m_result.players.begin(),
+                               m_result.players.end(), PlayerType::NONE);
+        if (empty != m_result.players.end())
+            *empty = t;
+
+    }
+}
+
 }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -97,10 +97,41 @@ static void submitAction(HIPContext* ctx, Action action, int targetIdx, int weap
     pthread_cond_signal(&slot->cond);
     pthread_mutex_unlock(&slot->mutex);
 }
+static void* setupThread(void* args)
+{
+    HIPContext* ctx = (HIPContext*)args;
+    SharedMemoryBlock* block = ctx->shm;
+
+    //get an array of player types form like the ctx context
+
+    pthread_mutex_lock(&block->global_mutex);
+    while(block->state.current_turn_owner_id!=-2)
+    {
+        pthread_cond_wait(&block->turn_condition, &block->global_mutex);
+    }
+   // Fill the mailbox with SETUP_GAME info
+    block->hip_mailbox.action_type          = Action::SETUP_GAME;
+    block->hip_mailbox.requesting_entity_id = -1;     // not a real player
+    block->hip_mailbox.target_id            = ctx->numPlayers;  // how many players
+    block->hip_mailbox.is_ready             = true;
+
+
+
+
+    pushLog(block, "[HIP] Setup sent: %d players", ctx->numPlayers);
+    pthread_cond_broadcast(&block->turn_condition);   // wake Arbiter
+    pthread_mutex_unlock(&block->global_mutex);
+
+    return nullptr;
+}
+
+    
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  waitForAction
-// ─────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────-─────────────────────────────────
 static void waitForAction(ActionSlot* slot, std::atomic<bool>* running,
                           Action& action, int& targetIdx, int& weaponIdx)
 {
