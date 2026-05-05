@@ -4,6 +4,9 @@
 #include <string>
 #include <cmath>
 #include "Characters.h"
+#include"../DisplayRendering/Animator.h"
+#include <SFML/Graphics.hpp>
+
 
 enum class EnemyType
 {
@@ -12,15 +15,156 @@ enum class EnemyType
     CYBOT_ENEMY,
     DRAGONTANK_ENEMY,
     GIGAGAIA_ENEMY,
+    GOBLIN_OGAN_ENEMY,
     IMPS_ENEMY,
     LAVOSCORE_ENEMY,
-    MOTHERnBRAIN_ENEMY,
     MUTANT_ENEMY,
+    MOTHERnBRAIN_ENEMY,
     NIZBELN_ENEMY,
-    RATnGERMLIN_ENEMY,
-    GOBLIN_OGAN_ENEMY
 
 };
+
+
+struct EnemySheetInfo
+{
+    const char* path;
+    int         frameCount;
+    FrameData   frames[6];   //  per-frame data, no vectors
+};
+
+static const EnemySheetInfo sheetData[] =
+{
+    //ALIEN_ENEMY — 6 frames, uniform
+    {   
+        "../Enemies/Alien_enemy.png", 6,
+        {
+            {   0, 0, 46, 48, 0.28f, 23.f, 48.f },
+            {  47, 0, 52, 49, 0.28f, 26.f, 49.f },
+            {  97, 0, 55, 49, 0.28f, 27.5f, 49.f },
+            { 0, 62, 47, 49, 0.28f, 23.5f, 49.f },
+            { 59, 62, 37, 49, 0.28f, 18.5f, 49.f },
+            { 114, 62, 40, 49, 0.28f, 20.f, 49.f },
+        }
+    },
+    {   //1.  BEAST_ENEMY — 6 frames, uniform
+        "../Enemies/Beasts_Colorful_enemy_movementFrame.png", 3,
+        {
+            {   0, 0, 27, 37, 0.35f, 28.f, 37.f },
+            {  38, 0, 25, 37, 0.35f, 28.f, 37.f },
+            { 73, 0, 25, 37, 0.35f, 28.f, 37.f }
+        }
+    },
+    {
+        // 2. CYBOT_ENEMY — 4 frames, uniform
+        "../Enemies/Cybot_enemy_movementFrame.png", 4,
+        {
+            {   0, 0, 52, 68, 0.35f, 26.f, 68.f },
+            {  56, 0, 52, 68, 0.35f, 20.f, 68.f },
+            {  114, 0, 52, 68, 0.35f, 20.f, 68.f },
+            { 172, 0, 52, 68, 0.35f, 20.f, 68.f }
+        }
+
+    }, 
+    //3. DRAGON_TANK
+
+    {
+        "../Enemies/DragonTank_enemy_movementFrame.png", 4, 
+        {
+            {   0, 0, 112, 82, 0.35f, 32.f, 64.f },
+            {  114, 0, 110, 82, 0.35f, 32.f, 64.f },
+            { 227, 0, 110, 82, 0.35f, 32.f, 64.f },
+            { 339, 0, 110, 82, 0.35f, 32.f, 64.f }
+        }
+
+    },
+
+    //4. GIGA GIA
+    {    "../Enemies/GigaGaia_enemy.png", 3, 
+    
+        {
+            {   0, 0, 175, 124, 0.38f, 87.5f, 124.f },
+            {  180, 0, 174, 124, 0.38f, 87.f, 124.f },
+            {  358, 0, 174, 124, 0.38f, 87.f, 124.f }
+
+        }
+    }, 
+
+    //5. GOBLIN_OGAN_ENEMY
+    {
+        "../Enemies/Goblin_Ogan_Green_Movement.png", 6, 
+        {
+            {0, 0, 40, 34, 0.35f, 20.f, 34.f },
+            { 52, 0, 51, 34, 0.35f, 25.5f, 34.f },
+            { 106, 0, 46, 34, 0.35f, 23.f, 34.f },
+            {157, 0, 40, 34, 0.35f, 20.f, 34.f },
+            {199, 0, 51, 34, 0.35f, 25.5f, 34.f },
+            {250, 0, 46, 34, 0.35f, 23.f, 34.f }
+
+        }
+    },
+    //6. IMPS ENEMY
+    {
+        "../Enemies/ImpsColorful_enemy_idle.png", 4, 
+        {
+            {0, 0, 21, 26, 0.35f, 11.5f, 26.f },
+            { 25, 0, 19, 26, 0.35f, 9.5f, 26.f },
+            { 47, 0, 21, 26, 0.35f, 11.5f, 26.f },
+            {71, 0, 22, 26, 0.35f, 11.f, 26.f }
+        }
+    }, 
+    //7. LAVOS CORE
+    {
+          "../Enemies/LavosCore_enemy_movementFrame.png", 4, 
+        {
+                {0, 0, 43, 65, 0.35f, 21.5f, 126.f },
+                { 48, 0,43, 65, 0.35f, 21.5f, 126.f },
+                {94, 0, 63, 65, 0.35f, 31.5f, 126.f },
+                {160, 0, 55, 65, 0.35f, 27.5f, 126.f }
+            
+        }
+    },
+
+    //8. MUTANT_ENEMY
+    {
+        "../Enemies/MutantNMetalMute_enemy_movement_frame.png", 6, 
+        {
+                {0, 0, 35, 64, 0.35f, 17.5f, 64.f }, 
+                {42, 0,  35, 64,0.35f, 17.5f, 64.f }, 
+                {90, 0,  35, 64, 0.35f, 17.5f, 64.f }, 
+                {135, 0,  35, 64, 0.35f, 17.5f, 64.f }, 
+                {182, 0,  35, 64, 0.35f, 17.5f, 64.f }, 
+                {228, 0,  35, 64, 0.35f, 17.5f, 64.f }
+
+
+        }
+    }, 
+    //9. MOTHER BRAIN
+    {
+        "../Enemies/MotherBrain_enemy_movementFrame.png", 4, 
+        {
+                {0, 0, 40, 36, 0.35f, 20.f, 36.f }, 
+                {45, 0, 40, 36, 0.35f, 20.f, 36.f }, 
+                {90, 0, 40, 36, 0.35f, 20.f, 36.f }, 
+                {135, 0, 40, 36, 0.35f, 20.f, 36.f }
+        }
+    }, 
+    //10. NIZBELN
+    {
+        "../Enemies/NizbelnNizble2_movementframe.png", 6, 
+        {
+                {0, 0, 46, 54, 0.35f, 23.f, 54.f }, 
+                {45, 0, 45, 54, 0.35f, 22.5f, 54.f }, 
+                {101, 0, 45, 54, 0.35f, 22.5f, 54.f }, 
+                {149, 0, 55, 54, 0.35f, 27.5f, 54.f }, 
+                {209, 0, 61, 54, 0.35f, 35.5f, 54.f }, 
+                {272, 0, 45, 54, 0.35f, 22.5f, 54.f }
+        }
+    }
+
+
+
+};
+
 
 class Enemy : public Character
 {
@@ -29,6 +173,11 @@ private:
     int         enemyId;
     char name[64];
 
+    sf::Sprite EnemySprite;
+    Animation spawnAnimation;
+
+
+
 public:
     Enemy(int id, EnemyType type)
         : Character(CharacterType::ENEMY),
@@ -36,6 +185,8 @@ public:
           enemyType(type)
     {}
     const char* getName()      const { return name; }
+
+
     // ── Roll stats ────────────────────────────────────────────
     // Call setRollNumber() before this
     // speedOverride unused for enemy (speed is fully random) — kept to
@@ -72,6 +223,8 @@ public:
                 name[sizeof(name) - 1] = '\0'   ; // Ensure null
                 SetOriginSprite(16.0f, 32.0f);
                 SetScaleSprite(4.0f, 4.0f);
+                
+
                 break;
             case EnemyType::BEAST_ENEMY  :
                 strncpy(name, "Beast", sizeof(name) - 1);
@@ -99,14 +252,14 @@ public:
             case EnemyType::GOBLIN_OGAN_ENEMY:
                 strncpy(name, "GoblinOgan", sizeof(name) - 1);
                 name[sizeof(name) - 1] = '\0'   ; // Ensure null    
-                SetOriginSprite(18.0f, 34.0f);
-                SetScaleSprite(3.0f, 3.0f);
+                // SetOriginSprite(18.0f, 34.0f);
+                SetScaleSprite(4.0f, 4.0f);
                 break;  
             case EnemyType::IMPS_ENEMY:
                 strncpy(name, "Imps", sizeof(name) - 1);
                 name[sizeof(name) - 1] = '\0'   ; // Ensure null
                     SetOriginSprite(22.0f, 23.0f);
-                SetScaleSprite(3.8f, 3.8f);
+                SetScaleSprite(5.5f, 5.5f);
                 break;
             case EnemyType::LAVOSCORE_ENEMY:    
                 strncpy(name, "LavosCore", sizeof(name) - 1);
@@ -126,19 +279,15 @@ public:
                 name[sizeof(name) - 1] = '\0'   ; // Ensure null-termination    
                 SetOriginSprite(16.0f, 30.0f);
                 SetScaleSprite(3.5f, 3.5f); 
+
                 break;
             case EnemyType::NIZBELN_ENEMY:
                 strncpy(name, "Nizbeln", sizeof(name) - 1);
                 name[sizeof(name) - 1] = '\0'   ; // Ensure null-termination
                 SetOriginSprite(44.0f, 55.0f);
-                SetScaleSprite(3.f,4.f);
+                SetScaleSprite(4.f,4.f);
                 break;
-            case EnemyType::RATnGERMLIN_ENEMY:
-                strncpy(name, "RatnGremlin", sizeof(name) - 1);
-                name[sizeof(name) - 1] = '\0'   ; // Ensure null-termination
-                SetOriginSprite(14.0f, 28.0f);
-                SetScaleSprite(3.0f, 3.0f);
-                break;
+
             default:
                 strncpy(name, "Enemy", sizeof(name) - 1);
                 name[sizeof(name) - 1] = '\0'   ; // Ensure null-termination
@@ -177,5 +326,36 @@ public:
     // ── Getters ──────────────────────────────────────────────
     int         getEnemyId()   const { return enemyId; }
     EnemyType   getEnemyType() const { return enemyType; }
+    void initAnimation(const EnemySheetInfo& info)
+{
+    spawnAnimation.loadTexture(info.path);
+    spawnAnimation.setLooping(true);
+
+    for (int i = 0; i < info.frameCount; i++)
+    {
+        const FrameData& f = info.frames[i];
+        spawnAnimation.addFrame(f.x, f.y, f.w, f.h, f.duration, f.centerX, f.centerY);
+    }
+}
+void updateAnimation(float dt)
+{
+    if (!alive) return;
+
+    spawnAnimation.update(dt);
+    spawnAnimation.applyToSprite(EnemySprite);
+
+    // apply scale from InitAllProperties
+    EnemySprite.setScale(getScaleX(), getScaleY());
+    EnemySprite.setPosition(getXPos(), getYPos());
+}
+
+void draw(sf::RenderWindow& window)
+{
+    if (!alive) return;
+    window.draw(EnemySprite);
+}
+
+
+
     
 };
