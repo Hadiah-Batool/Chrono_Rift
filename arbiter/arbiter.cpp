@@ -57,9 +57,13 @@ public:
             shared_block->state.enemies[i].setAlive(true);
             shared_block->state.enemies[i].clearStun();
             shared_block->state.enemies[i].ResetStamina();
-        }
 
-        // TODO: Do the same for players based on user input
+            // ==========================================
+            // YOUR CUSTOM ENEMY TYPE LOGIC GOES HERE
+            // e.g., int random_type = rand() % 3;
+            // shared_block->state.enemies[i].setType(random_type);
+            // ==========================================
+        }
     }
 
     // --- 2. The Scheduler Logic ---
@@ -174,6 +178,11 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         int damage = shared_block->state.players[attacker_id].getDemage();
 
         shared_block->state.enemies[target_id].TakeDamage(damage);
+
+        // check if dead
+        if (!shared_block->state.enemies[target_id].isAlive()) {
+            shared_block->state.enemies_defeated++;
+        }
         shared_block->state.players[attacker_id].ResetStamina();
         break;
 
@@ -188,6 +197,12 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         int weapon_id = shared_block->hip_mailbox.weapon_id;
         int weapon_damage = shared_block->state.players[attacker_id].getInventory().getEquippedWeapons().at(weapon_id).getDamage();// assuming this correctly retrieves the weapon damage
         shared_block->state.enemies[target_id].TakeDamage(weapon_damage);
+
+        // check if dead
+        if(shared_block->state.enemies[target_id].isAlive()) {
+            shared_block->state.enemies_defeated++;
+        }
+
         shared_block->state.players[attacker_id].ResetStamina();
         break;
 
@@ -244,6 +259,16 @@ void handle_enemy_action(const ActionRequest& request, SharedMemoryBlock* shared
 }
 
 
+bool need_more_enemies(const SharedMemoryBlock* shared_block) {
+
+    for (int i = 0; i < shared_block->state.num_active_enemies; ++i) {
+        if (shared_block->state.enemies[i].isAlive()) {
+            return false; // Found an alive enemy, no need for more
+        }
+    }
+    return true; // All enemies are dead, we need more
+}
+
 
 int main(int argc, char* argv[]) {
     // 1. Setup
@@ -271,8 +296,6 @@ int main(int argc, char* argv[]) {
 
     // 4. Initial State
     shared_block->state.game_running = true;
-    shared_block->state.level = 1;
-    shared_block->state.sublevel = 1;
     Arbiter arbiter(shared_block);
 
     // 5. Processes
@@ -281,12 +304,8 @@ int main(int argc, char* argv[]) {
     pid_t asp_pid = fork();
     if (asp_pid == 0) { execl("./asp", "./asp", shm_name, nullptr); return 1; }
 
-    // 6. Threads
-    pthread_create(&stamina_accumalator, NULL, stamina_recovery, shared_block);
-    pthread_create(&deadlock_detector, NULL, deadlock_detection, NULL);
-
-    // --- PHASE 6.5: BOOTSTRAP (Setup Players) ---
-    // (HIP still needs to tell us how many players to make on boot)
+    // --- PHASE 6: BOOTSTRAP (Setup Players & Enemies) ---
+    // A. Wait for HIP to define players
     pthread_mutex_lock(&shared_block->global_mutex);
     shared_block->state.current_turn_owner_id = -2;
     pthread_cond_broadcast(&shared_block->turn_condition);
@@ -295,68 +314,20 @@ int main(int argc, char* argv[]) {
     }
     handle_player_action(shared_block->hip_mailbox, shared_block);
 
-    // Initial Level 1 Enemy Boot
+    // B. Arbiter creates the random enemies
     arbiter.initialize_entities(240607, 7, 7);
 
     shared_block->hip_mailbox.is_ready = false;
     pthread_mutex_unlock(&shared_block->global_mutex);
 
-    // 7. MAIN EVENT LOOP
+    // --- PHASE 7: IGNITE THREADS ---
+    // Threads only start after all memory is fully populated
+    pthread_create(&stamina_accumalator, NULL, stamina_recovery, shared_block);
+    pthread_create(&deadlock_detector, NULL, deadlock_detection, NULL);
+
+    // --- PHASE 8: MAIN EVENT LOOP ---
     while (shared_block->state.game_running) {
         pthread_mutex_lock(&shared_block->global_mutex);
-
-        // ==========================================================
-        // INTERCEPT BLOCK: Level vs. Sublevel Progression
-        // ==========================================================
-        if (shared_block->state.haslevelended || shared_block->state.hassublevelended) {
-
-            // PATH A: A Full Level Ended -> Ask HIP for Player Info
-            if (shared_block->state.haslevelended) {
-                std::cout << "[ARBITER] Level Cleared! Awaiting HIP for Player data..." << std::endl;
-
-                // 1. Wake the HIP up using the special -2 ID
-                shared_block->state.current_turn_owner_id = -2;
-                shared_block->hip_mailbox.is_ready = false;
-                pthread_cond_broadcast(&shared_block->turn_condition);
-
-                // 2. Go to sleep until HIP provides the player info
-                while (!shared_block->hip_mailbox.is_ready) {
-                    pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
-                }
-
-                // 3. Pass the mailbox to your handler to do the player info shi
-                handle_player_action(shared_block->hip_mailbox, shared_block);
-
-                // Advance level counters
-                shared_block->state.level++;
-                shared_block->state.sublevel = 1;
-            }
-            // PATH B: Only a Sublevel Ended -> No HIP needed, just advance
-            else {
-                std::cout << "[ARBITER] Sublevel Cleared! Generating next wave instantly..." << std::endl;
-                shared_block->state.sublevel++;
-            }
-
-            // ==========================================================
-            // YOUR CUSTOM ENEMY CREATION LOGIC GOES HERE
-            // (This runs for both new Levels AND new Sublevels)
-            // ==========================================================
-            arbiter.initialize_entities(240607, 7, 7);
-
-            // Reset player stamina for the new fight
-            for(int i = 0; i < shared_block->state.num_active_players; ++i) {
-                 shared_block->state.players[i].setStamina(0);
-            }
-
-            // Clean up flags and mailboxes for the next loop
-            shared_block->state.haslevelended = false;
-            shared_block->state.hassublevelended = false;
-            shared_block->hip_mailbox.is_ready = false;
-
-            pthread_mutex_unlock(&shared_block->global_mutex);
-            continue; // Jump to Turn 1 of the new wave
-        }
-        // ==========================================================
 
         // --- NORMAL SCHEDULING ---
         int turn_index = -1;
@@ -369,29 +340,54 @@ int main(int argc, char* argv[]) {
             pthread_cond_broadcast(&shared_block->turn_condition);
 
             if (is_player) {
-                while (!shared_block->hip_mailbox.is_ready)
+                while (!shared_block->hip_mailbox.is_ready) {
                     pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
+                }
                 handle_player_action(shared_block->hip_mailbox, shared_block);
             } else {
                 struct timespec ts;
                 clock_gettime(CLOCK_REALTIME, &ts);
                 ts.tv_sec += 3;
                 int res = 0;
-                while (!shared_block->asp_mailbox.is_ready && res != ETIMEDOUT)
+                while (!shared_block->asp_mailbox.is_ready && res != ETIMEDOUT) {
                     res = pthread_cond_timedwait(&shared_block->turn_condition, &shared_block->global_mutex, &ts);
+                }
 
                 if (res == ETIMEDOUT && !shared_block->asp_mailbox.is_ready) {
-                    shared_block->asp_mailbox.action_type = Action::SKIP; // FORCED SKIP
+                    shared_block->asp_mailbox.action_type = Action::SKIP;
                     shared_block->asp_mailbox.requesting_entity_id = turn_index;
                 }
                 handle_enemy_action(shared_block->asp_mailbox, shared_block);
             }
+
+            // Flush mailboxes for the next turn
+            shared_block->hip_mailbox.is_ready = false;
+            shared_block->asp_mailbox.is_ready = false;
+
+            // Check for endgame conditions
+            if (shared_block->state.enemies_defeated >= 10) {
+                shared_block->state.game_running = false;
+                shared_block->state.game_result = true; // Player wins
+                break;
+            } else if (shared_block->state.num_active_players == 0) {
+                shared_block->state.game_running = false;
+                shared_block->state.game_result = false; // Enemy wins
+                break;
+            }
+
+
+            if(need_more_enemies(shared_block)) {
+                arbiter.initialize_entities(240607, 7, 7);
+            }
+            shared_block->state.turn_count++;
+
         }
+
         pthread_mutex_unlock(&shared_block->global_mutex);
         usleep(10000);
     }
 
-    // 8. Cleanup
+    // --- PHASE 9: CLEANUP ---
     kill(hip_pid, SIGTERM);
     kill(asp_pid, SIGTERM);
     waitpid(hip_pid, NULL, 0);
