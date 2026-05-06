@@ -152,24 +152,26 @@ public:
 };
 
 // 1. Updated Stamina Thread
+// 1. Updated Stamina Thread (Now with Pause logic)
 void* stamina_recovery(void* arg){
-    // Cast to the Master Block, not GameState
     auto* shared_block = static_cast<SharedMemoryBlock*>(arg);
 
     while(true){
-        // Lock the global mutex from the block
         pthread_mutex_lock(&shared_block->global_mutex);
 
-        for (int i = 0; i < shared_block->state.num_active_players; ++i) {
-            auto& player = shared_block->state.players[i];
-            if (player.isAlive()) {
-                player.setStamina(player.getStamina() + player.getStaminaRecoveryRate());
+        // ONLY recover stamina if the game is running AND we are NOT in a loading screen
+        if (shared_block->state.game_running && !shared_block->state.hassublevelended) {
+            for (int i = 0; i < shared_block->state.num_active_players; ++i) {
+                auto& player = shared_block->state.players[i];
+                if (player.isAlive()) {
+                    player.setStamina(player.getStamina() + player.getStaminaRecoveryRate());
+                }
             }
-        }
-        for (int i = 0; i < shared_block->state.num_active_enemies; ++i) {
-            auto& enemy = shared_block->state.enemies[i];
-            if (enemy.isAlive()) {
-                enemy.setStamina(enemy.getStamina() + enemy.getStaminaRecoveryRate());
+            for (int i = 0; i < shared_block->state.num_active_enemies; ++i) {
+                auto& enemy = shared_block->state.enemies[i];
+                if (enemy.isAlive()) {
+                    enemy.setStamina(enemy.getStamina() + enemy.getStaminaRecoveryRate());
+                }
             }
         }
 
@@ -178,6 +180,8 @@ void* stamina_recovery(void* arg){
     }
     return nullptr;
 }
+
+
 void* deadlock_detection(void* arg)
 {
     while(true){
@@ -414,23 +418,35 @@ int main(int argc, char* argv[])
             }
 
             // --- WAVE PROGRESSION (SUBLEVELS) ---
-            // If all enemies on screen are dead, but we haven't reached 10 kills yet
             if(need_more_enemies(shared_block)) {
+                // 1. Set the flag. This immediately freezes the stamina thread.
                 shared_block->state.hassublevelended = true;
                 shared_block->state.sublevel++;
 
                 std::cout << "[ARBITER] Wave cleared! Loading Sublevel " << shared_block->state.sublevel << "..." << std::endl;
 
-                // Parse the next text file
+                // 2. Parse the next text file & setup enemies
                 arbiter.initialize_entities(240607, 7, 7, shared_block->state.level, shared_block->state.sublevel);
 
-                // Reset player stamina for the new wave
                 for(int i = 0; i < shared_block->state.num_active_players; ++i) {
                      shared_block->state.players[i].setStamina(0);
                 }
 
-                // Delegate the new enemies to the ASP by firing an interrupt
                 kill(asp_pid, SIGUSR1);
+
+                // --- 3. THE CONDWAIT PAUSE SHI ---
+                // Signal the HIP that it's time to animate (using -3 as the UI state)
+                shared_block->state.current_turn_owner_id = -3;
+                pthread_cond_broadcast(&shared_block->turn_condition);
+
+                std::cout << "[ARBITER] Pausing kernel. Waiting for HIP to render transition..." << std::endl;
+
+                // 4. Sleep until the HIP tells us it is done animating
+                while (shared_block->state.hassublevelended) {
+                    pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
+                }
+
+                std::cout << "[ARBITER] HIP rendering complete. Resuming combat!" << std::endl;
             }
 
             shared_block->state.turn_count++;
