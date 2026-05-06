@@ -14,6 +14,7 @@
 #include "../shared/shared_types.h"
 #include "../resources/shared_mem_abs.h"
 #include "../DisplayRendering/render.h"
+#include "../DisplayRendering/Menu.h"
 
 
 
@@ -54,6 +55,8 @@ struct HIPContext
     std::vector<ActionSlot>      slots;
     std::vector<pthread_t>       playerTids;
     std::vector<PlayerThreadCtx> playerCtxs;
+    std::array<PlayerType, 4>        playerTypes;
+
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -99,29 +102,26 @@ static void submitAction(HIPContext* ctx, Action action, int targetIdx, int weap
 }
 static void* setupThread(void* args)
 {
-    HIPContext* ctx = (HIPContext*)args;
+    HIPContext*        ctx   = (HIPContext*)args;
     SharedMemoryBlock* block = ctx->shm;
 
-    //get an array of player types form like the ctx context
-
     pthread_mutex_lock(&block->global_mutex);
-    while(block->state.current_turn_owner_id!=-2)
-    {
+    while (block->state.current_turn_owner_id != -2)
         pthread_cond_wait(&block->turn_condition, &block->global_mutex);
-    }
-   // Fill the mailbox with SETUP_GAME info
+
     block->hip_mailbox.action_type          = Action::SETUP_GAME;
-    block->hip_mailbox.requesting_entity_id = -1;     // not a real player
-    block->hip_mailbox.target_id            = ctx->numPlayers;  // how many players
-    block->hip_mailbox.is_ready             = true;
+    block->hip_mailbox.requesting_entity_id = -1;
+    block->hip_mailbox.target_id            = ctx->numPlayers;
 
+    // Send the chosen player types from the menu
+    for (int i = 0; i < ctx->numPlayers; i++)
+        block->hip_mailbox.types[i] = ctx->playerTypes[i]; 
 
-
+    block->hip_mailbox.is_ready = true;
 
     pushLog(block, "[HIP] Setup sent: %d players", ctx->numPlayers);
-    pthread_cond_broadcast(&block->turn_condition);   // wake Arbiter
+    pthread_cond_broadcast(&block->turn_condition);
     pthread_mutex_unlock(&block->global_mutex);
-
     return nullptr;
 }
 
@@ -256,76 +256,90 @@ static void onSigterm(int) { if (g_arbiterPid > 0) kill(g_arbiterPid, SIGTERM); 
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  main
-//  argv[1] shm_name  argv[2] num_players  argv[3] arbiter_pid
+//  
 // ─────────────────────────────────────────────────────────────────────────────
 int main(int argc, char* argv[])
 {
-    if (argc < 4)
+    // argv[1] = shm_name only — arbiter owns the kill, not us
+    if (argc < 2)
     {
-        std::cerr << "[HIP] Usage: hip <shm_name> <num_players> <arbiter_pid>\n";
+        std::cerr << "[HIP] Usage: hip <shm_name>\n";
         return 1;
     }
 
-    const char* shmName    = argv[1];
-    int         numPlayers = std::atoi(argv[2]);
-    g_arbiterPid           = (pid_t)std::atoi(argv[3]);
+    const char* shmName = argv[1];
 
-    if (numPlayers < 1 || numPlayers > 4)
-    {
-        std::cerr << "[HIP] num_players must be 1-4\n";
-        return 1;
-    }
 
-    struct sigaction sa{};
-    sa.sa_handler = onSigterm;
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGTERM, &sa, nullptr);
 
-    // Attach to shared memory
+    // ── PHASE 1: Attach to shared memory first ────────────────────────────
     int fd = shm_open(shmName, O_RDWR, 0666);
     if (fd < 0) { perror("[HIP] shm_open"); return 1; }
     SharedMemoryBlock* shm = (SharedMemoryBlock*)mmap(
-        nullptr, sizeof(SharedMemoryBlock), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        nullptr, sizeof(SharedMemoryBlock),
+        PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
     if (shm == MAP_FAILED) { perror("[HIP] mmap"); return 1; }
 
-    std::cout << "[HIP] Attached. Players: " << numPlayers << "\n";
+    std::cout << "[HIP] Attached to shared memory\n";
 
+    // ── PHASE 2: Run the menu — blocks until user confirms party ──────────
+    sf::RenderWindow menuWindow(
+        sf::VideoMode((unsigned)MENU_WIN_W, (unsigned)MENU_WIN_H),
+        "Chrono Rift");
+
+    GameMenu menu(menuWindow,
+                  "../MapsNScreen/main_bg.png",
+                  "../MapsNScreen/level_map.png");
+
+    PartyConfig party = menu.run();  // blocks until DONE
+
+if (!party.valid())
+{
+    munmap(shm, sizeof(SharedMemoryBlock));
+    return 0;
+}
+
+    // menuWindow destructs here — window closes before renderer opens
+    std::cout << "[HIP] Party confirmed: " << party.numPlayers() << " players\n";
+
+    // ── PHASE 3: Build context with party data ────────────────────────────
     HIPContext ctx;
     ctx.shm        = shm;
-    ctx.numPlayers = numPlayers;
+    ctx.numPlayers = party.numPlayers();
     ctx.running.store(true);
 
-    // Renderer and Map live on the stack — do NOT heap-allocate or delete them
+    // Copy chosen types into ctx
+    for (int i = 0; i < ctx.numPlayers; i++)
+        ctx.playerTypes[i] = party.players[i];
+
+    // ── PHASE 4: Setup renderer and map ──────────────────────────────────
     Map map(0.0f, 0.0f, 800, 800);
     map.loadScreens({ "../MapsNScreen/FioanaForest_Lvl_tile1.png" });
     Renderer renderer(shm, &map);
-    ctx.renderer = &renderer;   // FIX: raw pointer to stack — never call delete on this
+    ctx.renderer = &renderer;
 
-    // Wire keypress callback
-    // Renderer::run() calls this lambda on each confirmed keypress:
-    //   Space      → ACTION_STRIKE / ACTION_USE_WEAPON (if weapon selected)
-    //   H          → ACTION_HEAL
-    //   Esc        → ACTION_SKIP
-    //   W          → ACTION_USE_WEAPON
-    //   S          → ACTION_SWAP_IN
-    //   Left/Right → renderer cycles enemy targets  (tracks internally)
-    //   Up/Down    → renderer cycles weapon slots   (tracks internally)
     renderer.setActionCallback([&ctx](Action act, int tgt, int wpn)
     {
         submitAction(&ctx, act, tgt, wpn);
     });
 
+    // ── PHASE 5: Send setup to arbiter, then spawn game threads ──────────
+    // setupThread waits for arbiter to signal -2, then sends party mailbox
+    pthread_t setupTid;
+    pthread_create(&setupTid, nullptr, setupThread, &ctx);
+    pthread_join(setupTid, nullptr);  // block until arbiter ACKs
+
+    std::cout << "[HIP] Setup complete — spawning player threads\n";
+
     spawnPlayerThreads(&ctx);
 
     pthread_t renderTid;
     pthread_create(&renderTid, nullptr, renderThread, &ctx);
-    pthread_join(renderTid, nullptr);
+    pthread_join(renderTid, nullptr);  // blocks until window closes
 
     ctx.running.store(false);
     joinAndCleanup(&ctx);
 
-  
     munmap(shm, sizeof(SharedMemoryBlock));
     return 0;
 }
