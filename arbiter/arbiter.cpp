@@ -19,7 +19,7 @@
 #include <fcntl.h>      // for shm_open
 #include <sys/mman.h>   // for mmap
 #include <cstring>      // for strerror
-#include "../shared/shared_types.h"
+#include "../shared/game_state.h"
 #include <time.h>
 
 using std::vector;
@@ -215,12 +215,13 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         break;
     }
 
-    case Action::EXHAUST:
+    case Action::EXHAUST: {
         int damage = shared_block->state.players[attacker_id].getDemage();
         int current_stamina = shared_block->state.enemies[target_id].getStamina();
         shared_block->state.enemies[target_id].setStamina(damage > current_stamina ? 0 : current_stamina - damage);
         shared_block->state.players[attacker_id].ResetStamina();
         break;
+    }
 
     case Action::USE_WEAPON: {
         int weapon_id = shared_block->hip_mailbox.weapon_id;
@@ -237,30 +238,35 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         break;
     }
 
-    case Action::SWAP_IN:
+    case Action::SWAP_IN: {
         int weapon_id = shared_block->hip_mailbox.weapon_id;
         shared_block->state.players[attacker_id].swapInFromBackpack(weapon_id); // assuming this correctly swaps the weapon
         shared_block->state.players[attacker_id].ResetStamina();
         break;
+    }
 
-    case Action::HEAL:
+    case Action::HEAL: {
         int current_hp = shared_block->state.players[attacker_id].getHp();
         // Heal 10% of max HP, but not above max HP
         int heal_amount = shared_block->state.players[attacker_id].getMaxHp() / 10;
         shared_block->state.players[attacker_id].RegainHealth(heal_amount);
         shared_block->state.players[attacker_id].ResetStamina();
         break;
+    }
 
-    case Action::SKIP:
+    case Action::SKIP: {
         shared_block->state.players[attacker_id].setStamina(shared_block->state.players[attacker_id].getMaxStamina() / 2);
         break;
+    }
 
-    case Action::SETUP_GAME:
+    case Action::SETUP_GAME: {
         // create number of players
         shared_block->state.num_active_players = shared_block->hip_mailbox.target_id;
         for(int i = 0; i < shared_block->state.num_active_players; i++){
             shared_block->state.players[i] = Player(shared_block->hip_mailbox.types[i]);
         }
+        break; // <--- This break was missing in your original code!
+    }
 
     default:
         break;
@@ -286,9 +292,10 @@ void handle_enemy_action(const ActionRequest& request, SharedMemoryBlock* shared
             break;
         }
 
-        case Action::SKIP:
+        case Action::SKIP: {
             shared_block->state.enemies[attacker_id].setStamina(shared_block->state.enemies[attacker_id].getMaxStamina() / 2);
             break;
+        }
 
         default:
             break;
@@ -341,9 +348,10 @@ int main(int argc, char* argv[])
 
     // 5. Processes
     pid_t hip_pid = fork();
-    if (hip_pid == 0) { execl("./hip", "./hip", shm_name, nullptr); return 1; }
+    if (hip_pid == 0) { execl("./hip.out", "./hip.out", shm_name, nullptr); return 1; }
+
     pid_t asp_pid = fork();
-    if (asp_pid == 0) { execl("./asp", "./asp", shm_name, nullptr); return 1; }
+    if (asp_pid == 0) { execl("./asp.out", "./asp.out", shm_name, nullptr); return 1; }
 
     // --- PHASE 6: BOOTSTRAP (Setup Players & Enemies) ---
     // A. Wait for HIP to define players

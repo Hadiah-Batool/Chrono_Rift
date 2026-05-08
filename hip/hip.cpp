@@ -4,14 +4,14 @@
 #include <unistd.h>
 #include <cstring>
 #include <cstdlib>
-#include <cstdarg>        
-#include <algorithm>        
+#include <cstdarg>
+#include <algorithm>
 #include <iostream>
 #include <vector>
 #include <signal.h>
 #include <functional>
-#include <atomic>           
-#include "../shared/shared_types.h"
+#include <atomic>
+#include "../shared/game_state.h"
 #include "../resources/shared_mem_abs.h"
 #include "../DisplayRendering/render.h"
 #include "../DisplayRendering/Menu.h"
@@ -115,7 +115,7 @@ static void* setupThread(void* args)
 
     // Send the chosen player types from the menu
     for (int i = 0; i < ctx->numPlayers; i++)
-        block->hip_mailbox.types[i] = ctx->playerTypes[i]; 
+        block->hip_mailbox.types[i] = ctx->playerTypes[i];
 
     block->hip_mailbox.is_ready = true;
 
@@ -125,7 +125,7 @@ static void* setupThread(void* args)
     return nullptr;
 }
 
-    
+
 
 
 
@@ -256,7 +256,7 @@ static void onSigterm(int) { if (g_arbiterPid > 0) kill(g_arbiterPid, SIGTERM); 
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  main
-//  
+//
 // ─────────────────────────────────────────────────────────────────────────────
 int main(int argc, char* argv[])
 {

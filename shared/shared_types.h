@@ -1,36 +1,24 @@
-#include "../Characters/Player.h"
-#include "../Characters/Enemy.h"
-#include "../Weapons/Weapons.h"
+#ifndef SHARED_TYPES_H
+#define SHARED_TYPES_H
+
 #include <array>
 #include <pthread.h>
 
-#define ACTION_LOG_SIZE 10      // stores last 10 actions
-#define ACTION_MSG_LEN  128     // max chars per message
+#define ACTION_LOG_SIZE 10
+#define ACTION_MSG_LEN  128
 
-
-enum class PlayerType
-{
-    CHRONO = 0,
-    FROG   = 1,
-    MARLE  = 2,
-    MAGUS  = 3,
-    NONE =4
+enum class PlayerType {
+    CHRONO = 0, FROG = 1, MARLE = 2, MAGUS = 3, NONE = 4
 };
 
 enum class Action {
-    STRIKE      = 0,
-    EXHAUST     = 1,
-    USE_WEAPON  = 2,
-    SWAP_IN     = 3,
-    HEAL        = 4,
-    SKIP        = 5,
-    SETUP_GAME =  6
+    STRIKE = 0, EXHAUST = 1, USE_WEAPON = 2, SWAP_IN = 3, HEAL = 4, SKIP = 5, SETUP_GAME = 6
 };
 
 struct ActionLog {
-    char    messages[ACTION_LOG_SIZE][ACTION_MSG_LEN];
-    int     head;               // index of oldest message
-    int     count;              // how many valid messages (max ACTION_LOG_SIZE)
+    char messages[ACTION_LOG_SIZE][ACTION_MSG_LEN];
+    int head;
+    int count;
 };
 
 struct Stamina {
@@ -39,76 +27,14 @@ struct Stamina {
     float recovery_rate;
 };
 
-// ---------------------------------------------------------
-// 1. THE MAILBOX (Written by HIP/ASP, Read by Arbiter)
-// ---------------------------------------------------------
-struct ActionRequest 
-{
-    int requesting_entity_id; // The index of the player/enemy taking the action
-    Action action_type;          // e.g., Action::SKIP, Action::STRIKE, etc.
-    int target_id;            // Which enemy/player is being attacked or number of players in case of SETUP_GAME
-    int weapon_id;            // Which weapon to use (if applicable)
-
-    bool is_ready;            // FLAG: HIP/ASP sets to TRUE when finished writing
-    PlayerType types[4];          // playertype in case need to make players
+// 1. THE MAILBOX
+struct ActionRequest {
+    int requesting_entity_id;
+    Action action_type;
+    int target_id;
+    int weapon_id;
+    bool is_ready;
+    PlayerType types[4];
 };
 
-// ---------------------------------------------------------
-// 2. THE PURE GAME STATE (Written by Arbiter, Read by HIP/ASP)
-// ---------------------------------------------------------
-struct GameState {
-    bool game_running;
-    bool game_result; // true if player wins, false if enemy wins
-    int turn_count;
-
-    // --- Entity Arrays ---
-    int num_active_players;
-    std::array<Player, 4> players;
-
-    int total_enemies_spawned;
-    int total_players_spawned;
-
-    int num_active_enemies;
-    std::array<Enemy, 9> enemies;
-
-    int num_artifacts;
-    std::array<Artifact, 5> artifacts;
-
-    // --- Arbiter's Turn Assignment ---
-    int current_turn_owner_id; // Arbiter sets this so HIP/ASP know who acts
-    bool is_player_turn;       // TRUE = HIP wakes up, FALSE = ASP wakes up
-
-    // --- Game Progress ---
-    int level;
-    int sublevel;
-    int enemies_defeated;
-
-    bool haslevelended;
-    bool hassublevelended;
-
-    struct special_weapon {
-        int solar_core_holder;   // -1 if free, otherwise entity ID
-        int lunar_blade_holder;  // -1 if free
-        int eclipse_relic_holder; // -1 if not introduced or free
-        bool eclipse_relic_exists;
-    } special_weapon_status;
-
-    ActionLog action_log;
-};
-
-// ---------------------------------------------------------
-// 3. THE MASTER SHARED MEMORY BLOCK (What you actually mmap)
-// ---------------------------------------------------------
-struct SharedMemoryBlock {
-    // 1. Synchronization Primitives (Must be here to sync access to the block)
-    pthread_mutex_t global_mutex;
-    pthread_mutex_t resource_table_mutex;
-    pthread_cond_t turn_condition;
-
-    // 2. The Read-Only Data (for the children)
-    GameState state;
-
-    // 3. The Writeable Mailboxes (for the children)
-    ActionRequest hip_mailbox;
-    ActionRequest asp_mailbox;
-};
+#endif // SHARED_TYPES_H

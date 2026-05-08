@@ -7,7 +7,7 @@
 #include <cstring>
 #include <iostream>
 #include <vector>
-#include "../shared/shared_types.h"
+#include "../shared/game_state.h"
 #include "../resources/shared_mem_abs.h"
 #include "../Characters/Enemy.h"
 
