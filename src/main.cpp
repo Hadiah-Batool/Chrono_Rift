@@ -1,138 +1,287 @@
-// #include "../DisplayRendering/Map.h"
-// #include <SFML/Graphics.hpp>
-// #include <iostream>
-// #include "../DisplayRendering/Animator.h"
-// #include "../DisplayRendering/render.h"
-// #include "../Characters/Player.h" 
-// #include "../Characters/Enemy.h"
-// #include "../DisplayRendering/Menu.h"
+// test_main.cpp
+// Standalone visual test — no arbiter, no shm, no HIP
+// Tests: enemy spawn positions, animations, map background
+// Run: ./test_game
 
-// int main()
-// {
-//     sf::RenderWindow window(
-//         sf::VideoMode(1200, 800),
-//         "Chrono Rift",
-//         sf::Style::Titlebar | sf::Style::Close
-//     );
-
-//     GameMenu menu(window,"../MapsNScreen/MenuScreen.jpg", "../MapsNScreen/Map_Overlay.png" );
-//     PartyConfig conf = menu.run();
-//     if (!conf.valid())
-//     {        std::cout << "No party selected, exiting.\n";
-//         return 0;
-//     }
-//     std::cout << "Selected level: " << conf.selectedLevel << "\n";
-//     std::cout << "Selected players:\n";
-
-
-//     // // ── Players ───────────────────────────────────────────────────────────────
-//     // Player chrono(PlayerType::CHRONO);
-//     // Player frog(PlayerType::FROG);
-//     // Player marle(PlayerType::MARLE);
-//     // Player magus(PlayerType::MAGUS);
-//     // chrono.loadTexture("../Players/Chrono_sprite_back_frame1.png");
-//     // frog.loadTexture("../Players/Frog_sprite_backframe1.png");
-//     // marle.loadTexture("../Players/Marle_sprite_backframe1.png");
-//     // magus.loadTexture("../Players/Magus_sprite_backframe1.png");
-//     // Enemy e1( 1, EnemyType::LAVOSCORE_ENEMY);
-//     // e1.loadTexture("../Enemies/LavosCore_frame1.png");
-//     // e1.InitAllProperties(400,400);
-//     // e1.setRollNumber(123, 3, 23);
-//     // e1.initRollStats();
-//     // e1.setAlive(true);
-//     // Enemy e2( 2, EnemyType::IMPS_ENEMY);
-//     // e2.loadTexture("../Enemies/MotherBrain_enemy_frame1.png");
-//     // e2.InitAllProperties(600,400);
-//     // e2.setRollNumber(456, 6, 56);
-//     // e2.initRollStats();
-//     // e2.setAlive(true);
-
-
-//     // chrono.InitAllProperties(260.f, 680.f);
-//     // chrono.setAlive(true);
-//     // chrono.setRollNumber(805, 5, 5);
-
-//     // magus.InitAllProperties(740.f, 700.f);
-//     // magus.setAlive(true);
-//     // magus.setRollNumber(805, 5, 5);
-
-
-//     // frog.InitAllProperties(450.f, 650.f);
-//     // marle.InitAllProperties (600.f, 620.f);
-//     // marle.setAlive(true);
-//     // marle.setRollNumber(805, 5, 5);
-
-//     // // Mess with some values so the bars look interesting
-//     // chrono.setHp(45);  
-//     // frog.setAlive(true);      // low HP — bar should go red
-//     // frog.setStamina(70);
-//     // marle.setStunned(true, 0);    // stunned — badge + bar goes yellow
-//     // marle.setStunEndTem(3);
-
-//     // // // ── Enemies ───────────────────────────────────────────────────────────────
-//     // // Enemy e1, e2, e3;
-//     // // e1.setHp(20);              // almost dead
-//     // // e2.setStunned(true);
-//     // // e2.setStunEndTem(2);
-//     // // // e3 is full health
-
-//     // // ── Map ───────────────────────────────────────────────────────────────────
-//     // Map map(0.0f, 0.0f, 800, 800);
-//     // map.loadScreens(
-//     //     {
-//     //     "../MapsNScreen/Fiaona'aForest_Lvl_tile1.png", 
-//     //     "../MapsNScreen/Fiaona'aForest_Lvl_tile2.png"
-//     // });
-
-//     // std::vector<Character*> enemies ={&e1, &e2};
-//     // // ── Wire up renderer ──────────────────────────────────────────────────────
-//     // std::vector<Player*>    players = { &chrono, &frog, &marle, &magus };
-//     // // std::vector<Character*> enemies = { &e1, &e2, &e3 };
-
-//     // Renderer renderer(players, enemies, &map);
-//     // seedTestWeapons(&chrono);
-
-//     // // // Start on player 0 (chrono) — change this to test different active players
-//     // // renderer.setActivePlayerIndex(0);
-
-//     // // run() blocks until window is closed
-//     // renderer.run();
-
-//     return 0;
-// }
 #include <SFML/Graphics.hpp>
+#include <iostream>
+#include <vector>
+#include "../DisplayRendering/Map.h"
 #include "../Characters/Enemy.h"
 
+// ─── Window size matches your renderer ───────────────────────────────────────
+constexpr float T_WIN_W = 1200.f;
+constexpr float T_WIN_H = 800.f;
+constexpr float T_MAP_W = 800.f;
+constexpr float T_MAP_H = 800.f;
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  TEST ENEMY TABLE — edit x, y, type freely to find good spawn positions
+//  These coords are what you'll paste into level_1_sublevel_1.txt later
+// ─────────────────────────────────────────────────────────────────────────────
+struct TestEnemy
+{
+    float     x, y;
+    EnemyType type;
+    int       id;
+};
+
+static TestEnemy g_testEnemies[] = {
+    // { 150.f, 400.f, EnemyType::GOBLIN_OGAN_ENEMY, 0 },
+    { 350.f, 310.f, EnemyType::IMPS_ENEMY,         1 },
+    { 495.f, 450.f, EnemyType::BEAST_ENEMY,         2 },
+    { 365.f, 270.f, EnemyType::ALIEN_ENEMY,         3 },
+    // ── Add / comment out enemies here to test positions ──────────────────
+    { 275.f, 545.f, EnemyType::CYBOT_ENEMY,      4 },
+    { 220.f, 420.f, EnemyType::MUTANT_ENEMY,     5 },
+    { 620.f, 410.f, EnemyType::NIZBELN_ENEMY,    6 },
+    { 580.f, 520.f, EnemyType::LAVOSCORE_ENEMY, 8 },
+    // { 400.f, 600.f, EnemyType::MOTHERnBRAIN_ENEMY, 9 },
+    //  { 300.f, 300.f, EnemyType::DRAGONTANK_ENEMY, 7 },
+     { 485.f, 385.f, EnemyType::BLOB_ENEMY, 11 }
+};
+static constexpr int NUM_TEST_ENEMIES =
+    sizeof(g_testEnemies) / sizeof(g_testEnemies[0]);
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  printPositions — dumps current positions to terminal so you can copy-paste
+//  into your txt file
+// ─────────────────────────────────────────────────────────────────────────────
+void printPositions()
+{
+    std::cout << "\n=== CURRENT ENEMY POSITIONS (copy into txt file) ===\n";
+    std::cout << NUM_TEST_ENEMIES << "\n";
+    for (int i = 0; i < NUM_TEST_ENEMIES; i++)
+    {
+        std::cout << (int)g_testEnemies[i].x << " "
+                  << (int)g_testEnemies[i].y << " "
+                  << (int)g_testEnemies[i].type
+                  << "\n";
+    }
+    std::cout << "=====================================================\n\n";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  main
+// ─────────────────────────────────────────────────────────────────────────────
 int main()
 {
-    sf::RenderWindow window(sf::VideoMode(800, 600), "Enemy Anim Test");
+    // ── Window ────────────────────────────────────────────────────────────────
+    sf::RenderWindow window(
+        sf::VideoMode((unsigned)T_WIN_W, (unsigned)T_WIN_H),
+        "Enemy Position Tester — Fiona's Forest",
+        sf::Style::Titlebar | sf::Style::Close
+    );
     window.setFramerateLimit(60);
 
-    Enemy e(0, EnemyType::NIZBELN_ENEMY);
-    e.setRollNumber(123456, 6, 56);
-    e.initRollStats();
-    e.InitAllProperties(400.f, 400.f);
+    // ── Map ───────────────────────────────────────────────────────────────────
+    Map map(0.f, 0.f, T_MAP_W, T_MAP_H);
+    if (!map.loadScreens({ "../MapsNScreen/Fiaona'aForest_Lvl_tile2.png" }))
+        std::cerr << "[TEST] Map failed to load — continuing without bg\n";
 
-    int typeIdx = static_cast<int>(e.getEnemyType());
-    e.initAnimation(sheetData[typeIdx]);
+    // ── Font (for overlay labels) ─────────────────────────────────────────────
+    sf::Font font;
+    bool fontLoaded = font.loadFromFile("../DisplayRendering/BlockBlueprint.ttf");
 
+    // ── Build enemies ─────────────────────────────────────────────────────────
+    std::vector<Enemy> enemies;
+    enemies.reserve(NUM_TEST_ENEMIES);
+
+    for (int i = 0; i < NUM_TEST_ENEMIES; i++)
+    {
+        Enemy e(g_testEnemies[i].id, g_testEnemies[i].type);
+
+        // Give it some stats so it doesn't crash on getters
+        e.setRollNumber(240607, 7, 7);
+        e.initRollStats();
+        e.setAlive(true);
+        e.InitAllProperties(g_testEnemies[i].x, g_testEnemies[i].y);
+
+        // Load animation from the global sheetData table
+        int sheetIdx = (int)g_testEnemies[i].type;
+        e.initAnimation(sheetData[sheetIdx]);
+
+        enemies.push_back(std::move(e));
+    }
+
+    // ── Print initial positions ───────────────────────────────────────────────
+    printPositions();
+    std::cout << "[TEST] Controls:\n"
+              << "  P      — print current positions to terminal\n"
+              << "  1-9    — select enemy (by index)\n"
+              << "  WASD   — nudge selected enemy 5px\n"
+              << "  Shift+WASD — nudge 20px\n"
+              << "  ESC    — quit\n\n";
+
+    // ── Selection state ───────────────────────────────────────────────────────
+    int  selected  = 0;
     sf::Clock clock;
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Game loop
+    // ─────────────────────────────────────────────────────────────────────────
     while (window.isOpen())
     {
-        sf::Event event;
-        while (window.pollEvent(event))
-            if (event.type == sf::Event::Closed)
-                window.close();
-
         float dt = clock.restart().asSeconds();
 
-        e.updateAnimation(dt);          // ← handles update + applyToSprite internally
+        // ── Events ────────────────────────────────────────────────────────────
+        sf::Event ev{};
+        while (window.pollEvent(ev))
+        {
+            if (ev.type == sf::Event::Closed)
+                window.close();
 
-        window.clear(sf::Color(20, 20, 20));
-        e.draw(window);                 // ← just draws
+            if (ev.type == sf::Event::KeyPressed)
+            {
+                float step = sf::Keyboard::isKeyPressed(sf::Keyboard::LShift) ? 20.f : 5.f;
+
+                switch (ev.key.code)
+                {
+                    case sf::Keyboard::Escape: window.close(); break;
+                    case sf::Keyboard::P:      printPositions(); break;
+
+                    // ── Select enemy by number key ─────────────────────────────
+                    case sf::Keyboard::Num1: selected = 0; break;
+                    case sf::Keyboard::Num2: selected = 1; break;
+                    case sf::Keyboard::Num3: selected = 2; break;
+                    case sf::Keyboard::Num4: selected = 3; break;
+                    case sf::Keyboard::Num5: selected = 4; break;
+                    case sf::Keyboard::Num6: selected = 5; break;
+                    case sf::Keyboard::Num7: selected = 6; break;
+                    case sf::Keyboard::Num8: selected = 7; break;
+                    case sf::Keyboard::Num9: selected = 8; break;
+
+                    // ── Nudge selected enemy ───────────────────────────────────
+                    case sf::Keyboard::A:
+                        if (selected < NUM_TEST_ENEMIES)
+                        {
+                            g_testEnemies[selected].x -= step;
+                            enemies[selected].setXPos(g_testEnemies[selected].x);
+                        }
+                        break;
+                    case sf::Keyboard::D:
+                        if (selected < NUM_TEST_ENEMIES)
+                        {
+                            g_testEnemies[selected].x += step;
+                            enemies[selected].setXPos(g_testEnemies[selected].x);
+                        }
+                        break;
+                    case sf::Keyboard::W:
+                        if (selected < NUM_TEST_ENEMIES)
+                        {
+                            g_testEnemies[selected].y -= step;
+                            enemies[selected].setYPos(g_testEnemies[selected].y);
+                        }
+                        break;
+                    case sf::Keyboard::S:
+                        if (selected < NUM_TEST_ENEMIES)
+                        {
+                            g_testEnemies[selected].y += step;
+                            enemies[selected].setYPos(g_testEnemies[selected].y);
+                        }
+                        break;
+
+                    default: break;
+                }
+
+                selected = std::min(selected, NUM_TEST_ENEMIES - 1);
+            }
+        }
+
+        // ── Update animations ─────────────────────────────────────────────────
+        for (auto& e : enemies)
+            e.updateAnimation(dt);
+
+        // ── Draw ──────────────────────────────────────────────────────────────
+        window.clear(sf::Color(10, 20, 10));
+        map.draw(window);
+
+        for (int i = 0; i < (int)enemies.size(); i++)
+        {
+            enemies[i].draw(window);
+
+            // ── Selection highlight ring ───────────────────────────────────────
+            if (i == selected)
+            {
+                sf::CircleShape ring(22.f);
+                ring.setFillColor(sf::Color::Transparent);
+                ring.setOutlineColor(sf::Color(255, 220, 50, 200));
+                ring.setOutlineThickness(2.f);
+                ring.setPosition(
+                    g_testEnemies[i].x - 22.f,
+                    g_testEnemies[i].y - 22.f
+                );
+                window.draw(ring);
+            }
+
+            // ── Coord label ───────────────────────────────────────────────────
+            if (fontLoaded)
+            {
+                sf::Text label;
+                label.setFont(font);
+                label.setCharacterSize(11);
+                label.setFillColor(i == selected
+                    ? sf::Color(255, 220, 50, 255)
+                    : sf::Color(200, 200, 200, 160));
+                label.setString(
+                    "[" + std::to_string(i) + "] "
+                    + enemies[i].getName()
+                    + "\n("
+                    + std::to_string((int)g_testEnemies[i].x)
+                    + ", "
+                    + std::to_string((int)g_testEnemies[i].y)
+                    + ")"
+                );
+                label.setPosition(g_testEnemies[i].x - 10.f,
+                                  g_testEnemies[i].y - 48.f);
+                window.draw(label);
+            }
+        }
+
+        // ── Sidebar hint ──────────────────────────────────────────────────────
+        if (fontLoaded)
+        {
+            sf::RectangleShape sidebar({400.f, T_WIN_H});
+            sidebar.setPosition(T_MAP_W, 0.f);
+            sidebar.setFillColor(sf::Color(10, 10, 20, 220));
+            window.draw(sidebar);
+
+            sf::Text hint;
+            hint.setFont(font);
+            hint.setCharacterSize(13);
+            hint.setFillColor(sf::Color(180, 180, 200, 255));
+            hint.setPosition(T_MAP_W + 12.f, 20.f);
+
+            std::string info = "ENEMY POSITION TESTER\n\n";
+            info += "Selected: [" + std::to_string(selected) + "] "
+                  + enemies[selected].getName() + "\n";
+            info += "X: " + std::to_string((int)g_testEnemies[selected].x)
+                  + "  Y: " + std::to_string((int)g_testEnemies[selected].y) + "\n\n";
+            info += "Controls:\n";
+            info += "  1-9     select enemy\n";
+            info += "  WASD    nudge 5px\n";
+            info += "  Shift+WASD  nudge 20px\n";
+            info += "  P       print positions\n";
+            info += "  ESC     quit\n\n";
+            info += "All enemies:\n";
+            for (int i = 0; i < NUM_TEST_ENEMIES; i++)
+            {
+                info += "  [" + std::to_string(i) + "] "
+                      + enemies[i].getName()
+                      + " (" + std::to_string((int)g_testEnemies[i].x)
+                      + ", " + std::to_string((int)g_testEnemies[i].y) + ")\n";
+            }
+
+            hint.setString(info);
+            window.draw(hint);
+        }
+
         window.display();
     }
+
+    // ── Final positions on exit ───────────────────────────────────────────────
+    std::cout << "\n[TEST] Final positions on exit:\n";
+    printPositions();
 
     return 0;
 }

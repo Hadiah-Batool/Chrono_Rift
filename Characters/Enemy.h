@@ -21,6 +21,7 @@ enum class EnemyType
     MUTANT_ENEMY,
     MOTHERnBRAIN_ENEMY,
     NIZBELN_ENEMY,
+    BLOB_ENEMY
 
 };
 
@@ -159,7 +160,22 @@ static const EnemySheetInfo sheetData[] =
                 {209, 0, 61, 54, 0.35f, 35.5f, 54.f }, 
                 {272, 0, 45, 54, 0.35f, 22.5f, 54.f }
         }
-    }
+    },
+    //11. BLOB ENEMY
+    {
+        "../Enemies/Blob.png", 5, 
+        {
+            {0, 0, 38, 34, 0.35f, 19.f, 34.f }, 
+            {38, 0, 38, 34, 0.35f, 15.f, 15.f }, 
+            {76, 0, 38, 34, 0.35f, 15.f, 15.f }, 
+            {114, 0, 38, 34, 0.35f, 15.f, 15.f }, 
+            {152, 0, 38, 34, 0.35f, 15.f, 15.f }, 
+  
+        }
+
+
+        }
+    
 
 
 
@@ -286,6 +302,13 @@ public:
                 name[sizeof(name) - 1] = '\0'   ; // Ensure null-termination
                 SetOriginSprite(44.0f, 55.0f);
                 SetScaleSprite(4.f,4.f);
+                break;
+
+            case EnemyType::BLOB_ENEMY:
+                strncpy(name, "Blob", sizeof(name) - 1);
+                name[sizeof(name) - 1] = '\0'   ; // Ensure null-termination
+                SetOriginSprite(19.0f, 34.0f);
+                SetScaleSprite(4.f, 4.f);
                 break;
 
             default:
