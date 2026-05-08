@@ -12,7 +12,15 @@ enum class PlayerType {
 };
 
 enum class Action {
-    STRIKE = 0, EXHAUST = 1, USE_WEAPON = 2, SWAP_IN = 3, HEAL = 4, SKIP = 5, SETUP_GAME = 6
+    STRIKE      = 0,
+    EXHAUST     = 1,
+    USE_WEAPON  = 2,
+    SWAP_IN     = 3,
+    HEAL        = 4,
+    SKIP        = 5,
+    SETUP_GAME  = 6,
+    GET_ARTIFACT = 7,      // NEW
+    RELEASE_ARTIFACT = 8   // NEW
 };
 
 struct ActionLog {

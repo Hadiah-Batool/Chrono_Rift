@@ -16,10 +16,10 @@
 #include "../Characters/Player.h"
 #include "../Characters/Enemy.h"
 #include "../Weapons/Weapons.h"
-#include <fcntl.h>      // for shm_open
-#include <sys/mman.h>   // for mmap
-#include <cstring>      // for strerror
-#include "../shared/game_state.h"
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <cstring>
+#include "../shared/game_state.h" // Updated Include
 #include <time.h>
 
 using std::vector;
@@ -29,245 +29,261 @@ using std::mutex;
 using std::condition_variable;
 using std::array;
 
+#define time_of_response 3
 
-#define time_of_response 3 // 3 seconds to make move
+// ─────────────────────────────────────────────────────────────────────────────
+//  ARTIFACT HELPER SECTION (Requires resource_table_mutex lock)
+// ─────────────────────────────────────────────────────────────────────────────
 
+static int find_artifact_idx(SharedMemoryBlock* sb, int weapon_id) {
+    for (int i = 0; i < sb->state.num_artifacts; ++i)
+        if (sb->state.artifacts[i].getWeaponId() == weapon_id)
+            return i;
+    return -1;
+}
 
+static bool try_grant_artifact_to_player(SharedMemoryBlock* sb, int player_idx, int art_idx) {
+    Artifact& art = sb->state.artifacts[art_idx];
+    if (art.isHeld()) {
+        sb->state.players_artifact_state[player_idx].waiting_for_artifact_idx = art_idx;
+        std::cout << "[ARBITER][ARTIFACT] Player " << player_idx
+                  << " is WAITING for artifact " << art_idx
+                  << " (held by entity " << art.getHolder() << ")\n";
+        return false;
+    }
+    art.setHolder(player_idx);
+    sb->state.players_artifact_state[player_idx].holding_artifact_idx   = art_idx;
+    sb->state.players_artifact_state[player_idx].waiting_for_artifact_idx = -1;
+    std::cout << "[ARBITER][ARTIFACT] Player " << player_idx
+              << " acquired artifact " << art_idx << " ("
+              << art.getName() << ")\n";
+    sb->state.players[player_idx].pickupWeapon(static_cast<Weapon&>(art));
+    return true;
+}
 
+static bool try_grant_artifact_to_enemy(SharedMemoryBlock* sb, int enemy_idx, int art_idx) {
+    Artifact& art = sb->state.artifacts[art_idx];
+    if (art.isHeld()) {
+        sb->state.enemies_artifact_state[enemy_idx].waiting_for_artifact_idx = art_idx;
+        std::cout << "[ARBITER][ARTIFACT] Enemy " << enemy_idx
+                  << " is WAITING for artifact " << art_idx << "\n";
+        return false;
+    }
+    art.setHolder(10 + enemy_idx);
+    sb->state.enemies_artifact_state[enemy_idx].holding_artifact_idx   = art_idx;
+    sb->state.enemies_artifact_state[enemy_idx].waiting_for_artifact_idx = -1;
+    std::cout << "[ARBITER][ARTIFACT] Enemy " << enemy_idx
+              << " acquired artifact " << art_idx << "\n";
+    return true;
+}
+
+static void release_artifact_from_player(SharedMemoryBlock* sb, int player_idx) {
+    int art_idx = sb->state.players_artifact_state[player_idx].holding_artifact_idx;
+    if (art_idx < 0) return;
+    sb->state.artifacts[art_idx].release();
+    sb->state.players_artifact_state[player_idx].holding_artifact_idx   = -1;
+    sb->state.players_artifact_state[player_idx].waiting_for_artifact_idx = -1;
+    std::cout << "[ARBITER][ARTIFACT] Player " << player_idx << " released artifact " << art_idx << "\n";
+    pthread_cond_broadcast(&sb->turn_condition);
+}
+
+static void release_artifact_from_enemy(SharedMemoryBlock* sb, int enemy_idx) {
+    int art_idx = sb->state.enemies_artifact_state[enemy_idx].holding_artifact_idx;
+    if (art_idx < 0) return;
+    sb->state.artifacts[art_idx].release();
+    sb->state.enemies_artifact_state[enemy_idx].holding_artifact_idx   = -1;
+    sb->state.enemies_artifact_state[enemy_idx].waiting_for_artifact_idx = -1;
+    std::cout << "[ARBITER][ARTIFACT] Enemy " << enemy_idx << " released artifact " << art_idx << "\n";
+    pthread_cond_broadcast(&sb->turn_condition);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ARBITER KERNEL CLASS
+// ─────────────────────────────────────────────────────────────────────────────
 
 class Arbiter {
 private:
-    // The Arbiter only holds a pointer to the Master Block. No ghost data!
     SharedMemoryBlock* shared_block;
-
 public:
-    // Bind the Arbiter to the shared memory upon creation
-    Arbiter(SharedMemoryBlock* block)
-     {
-        this->shared_block = block;
-    }
+    Arbiter(SharedMemoryBlock* block) { this->shared_block = block; }
 
-    // --- 1. Initialization (Run before forking children) ---
     void initialize_entities(int seed_roll_full, int seed_last_dig, int seed_last_two, int level, int sublevel) {
-
-        // Construct the dynamic filename
         std::string filename = "enemies_description/level_" + std::to_string(level) + "_sublevel_" + std::to_string(sublevel) + ".txt";
         std::ifstream infile(filename);
-
         if (infile.is_open()) {
             int num_enemies;
-
-            // 1. Read the number of enemies
             if (infile >> num_enemies) {
                 shared_block->state.num_active_enemies = num_enemies;
-                std::cout << "[ARBITER] Parsing " << filename << ". Spawning " << num_enemies << " enemies." << std::endl;
-
-                // 2. Loop through and read x, y, and type for each enemy
+                std::cout << "[ARBITER] Parsing " << filename << ". Spawning " << num_enemies << " enemies.\n";
                 for (int i = 0; i < num_enemies; ++i) {
                     int x, y, type;
                     if (infile >> x >> y >> type) {
-
-                        // Pass the parsed data to your Enemy constructor/setters
-                        // (Adjust this line if your constructor takes arguments in a different order)
-                        // shared_block->state.enemies[i] = Enemy(type, x, y);
-
-                        // For now, setting the basic stats to keep the loop functioning:
                         shared_block->state.enemies[i].setRollNumber(seed_roll_full, seed_last_dig, seed_last_two);
                         shared_block->state.enemies[i].initRollStats();
                         shared_block->state.enemies[i].setAlive(true);
                         shared_block->state.enemies[i].clearStun();
                         shared_block->state.enemies[i].ResetStamina();
-
-                        std::cout << "  -> Spawned Enemy " << i << " (Type: " << type << ", X: " << x << ", Y: " << y << ")" << std::endl;
+                        std::cout << "  -> Spawned Enemy " << i << " (Type: " << type << ")\n";
                     }
                 }
             }
             infile.close();
         } else {
-            std::cerr << "[ARBITER] CRITICAL: Could not open " << filename << ". Check if 'enemies_description' folder exists." << std::endl;
+            std::cerr << "[ARBITER] CRITICAL: Could not open " << filename << "\n";
         }
     }
 
-    // --- 2. The Scheduler Logic ---
     void find_turn(int* out_turn_index, bool* out_turn) {
-        *out_turn_index = -1; // Default to no one ready
-
+        *out_turn_index = -1;
         bool check_players_first = rand() % 2 == 0;
         int num_players = shared_block->state.num_active_players;
         int num_enemies = shared_block->state.num_active_enemies;
 
         if(check_players_first) {
             for(int i = 0; i < num_players; ++i) {
-                // Skip dead or stunned players
                 if (!shared_block->state.players[i].isAlive() || shared_block->state.players[i].isStunned()) continue;
-
                 if(shared_block->state.players[i].getStamina() >= shared_block->state.players[i].getMaxStamina()) {
-                    *out_turn_index = i;
-                    *out_turn = true;
-                    return;
+                    *out_turn_index = i; *out_turn = true; return;
                 }
             }
             for(int i = 0; i < num_enemies; ++i) {
                 if (!shared_block->state.enemies[i].isAlive() || shared_block->state.enemies[i].isStunned()) continue;
-
                 if(shared_block->state.enemies[i].getStamina() >= shared_block->state.enemies[i].getMaxStamina()) {
-                    *out_turn_index = num_players + i;
-                    *out_turn = false;
-                    return;
+                    *out_turn_index = num_players + i; *out_turn = false; return;
                 }
             }
         } else {
-            // Check enemies first
             for(int i = 0; i < num_enemies; ++i) {
                 if (!shared_block->state.enemies[i].isAlive() || shared_block->state.enemies[i].isStunned()) continue;
-
                 if(shared_block->state.enemies[i].getStamina() >= shared_block->state.enemies[i].getMaxStamina()) {
-                    *out_turn_index = num_players + i;
-                    *out_turn = false;
-                    return;
+                    *out_turn_index = num_players + i; *out_turn = false; return;
                 }
             }
             for(int i = 0; i < num_players; ++i) {
                 if (!shared_block->state.players[i].isAlive() || shared_block->state.players[i].isStunned()) continue;
-
                 if(shared_block->state.players[i].getStamina() >= shared_block->state.players[i].getMaxStamina()) {
-                    *out_turn_index = i;
-                    *out_turn = true;
-                    return;
+                    *out_turn_index = i; *out_turn = true; return;
                 }
             }
         }
     }
 
-    // --- 3. Combat & Mechanic Handlers ---
     void apply_stun_to_enemy(int enemy_index, int duration_seconds, pid_t asp_pid) {
-        std::cout << "[ARBITER] Applying stun to Enemy " << enemy_index << " for " << duration_seconds << " seconds." << std::endl;
-
-        // Update the timestamp in shared memory
+        std::cout << "[ARBITER] Applying stun to Enemy " << enemy_index << " for " << duration_seconds << " seconds.\n";
         shared_block->state.enemies[enemy_index].applyStun(duration_seconds);
-
-        // Fire the asynchronous interrupt to the ASP
         kill(asp_pid, SIGUSR1);
     }
 };
 
-// 1. Updated Stamina Thread
-// 1. Updated Stamina Thread (Now with Pause logic)
+// ─────────────────────────────────────────────────────────────────────────────
+//  STAMINA THREAD
+// ─────────────────────────────────────────────────────────────────────────────
+
 void* stamina_recovery(void* arg){
     auto* shared_block = static_cast<SharedMemoryBlock*>(arg);
-
     while(true){
         pthread_mutex_lock(&shared_block->global_mutex);
-
-        // ONLY recover stamina if the game is running AND we are NOT in a loading screen
         if (shared_block->state.game_running && !shared_block->state.hassublevelended) {
             for (int i = 0; i < shared_block->state.num_active_players; ++i) {
                 auto& player = shared_block->state.players[i];
-                if (player.isAlive()) {
-                    player.setStamina(player.getStamina() + player.getStaminaRecoveryRate());
-                }
+                if (player.isAlive()) player.setStamina(player.getStamina() + player.getStaminaRecoveryRate());
             }
             for (int i = 0; i < shared_block->state.num_active_enemies; ++i) {
                 auto& enemy = shared_block->state.enemies[i];
-                if (enemy.isAlive()) {
-                    enemy.setStamina(enemy.getStamina() + enemy.getStaminaRecoveryRate());
-                }
+                if (enemy.isAlive()) enemy.setStamina(enemy.getStamina() + enemy.getStaminaRecoveryRate());
             }
         }
-
         pthread_mutex_unlock(&shared_block->global_mutex);
-        usleep(100000); // 100ms
+        usleep(100000);
     }
     return nullptr;
 }
 
-
-void* deadlock_detection(void* arg)
-{
-    while(true){
-        // Check for deadlocks and resolve them
-        sleep(5); // Sleep for 5 seconds before checking again
-    }
-    return nullptr;
-}
-
-
-
+// ─────────────────────────────────────────────────────────────────────────────
+//  ACTION HANDLERS
+// ─────────────────────────────────────────────────────────────────────────────
 
 void handle_player_action(const ActionRequest& request, SharedMemoryBlock* shared_block) {
     int attacker_id = shared_block->hip_mailbox.requesting_entity_id;
     int target_id   = shared_block->hip_mailbox.target_id;
 
-    switch (request.action_type)
-    {
+    switch (request.action_type) {
     case Action::STRIKE: {
         int damage = shared_block->state.players[attacker_id].getDemage();
         shared_block->state.enemies[target_id].TakeDamage(damage);
-
-        // Check if this strike killed the enemy
         if (!shared_block->state.enemies[target_id].isAlive()) {
-            shared_block->state.enemies_defeated++;
-            shared_block->state.num_active_enemies--; // Reduce count of living enemies
-            std::cout << "[ARBITER] Enemy " << target_id << " defeated! Total: "
-                        << shared_block->state.enemies_defeated << "/10" << std::endl;
-        }
-        shared_block->state.players[attacker_id].ResetStamina();
-        break;
-    }
-
-    case Action::EXHAUST: {
-        int damage = shared_block->state.players[attacker_id].getDemage();
-        int current_stamina = shared_block->state.enemies[target_id].getStamina();
-        shared_block->state.enemies[target_id].setStamina(damage > current_stamina ? 0 : current_stamina - damage);
-        shared_block->state.players[attacker_id].ResetStamina();
-        break;
-    }
-
-    case Action::USE_WEAPON: {
-        int weapon_id = shared_block->hip_mailbox.weapon_id;
-        int weapon_damage = shared_block->state.players[attacker_id].getInventory().getEquippedWeapons().at(weapon_id).getDamage();
-        shared_block->state.enemies[target_id].TakeDamage(weapon_damage);
-
-        // Check if this weapon attack killed the enemy
-        if (!shared_block->state.enemies[target_id].isAlive()) {
+            release_artifact_from_enemy(shared_block, target_id);
             shared_block->state.enemies_defeated++;
             shared_block->state.num_active_enemies--;
-            std::cout << "[ARBITER] Enemy " << target_id << " eliminated by weapon!" << std::endl;
+            std::cout << "[ARBITER] Enemy " << target_id << " defeated! Total: " << shared_block->state.enemies_defeated << "/10\n";
         }
         shared_block->state.players[attacker_id].ResetStamina();
         break;
     }
-
-    case Action::SWAP_IN: {
-        int weapon_id = shared_block->hip_mailbox.weapon_id;
-        shared_block->state.players[attacker_id].swapInFromBackpack(weapon_id); // assuming this correctly swaps the weapon
+    case Action::EXHAUST: {
+        int damage        = shared_block->state.players[attacker_id].getDemage();
+        int cur_stamina   = shared_block->state.enemies[target_id].getStamina();
+        shared_block->state.enemies[target_id].setStamina(damage > cur_stamina ? 0 : cur_stamina - damage);
         shared_block->state.players[attacker_id].ResetStamina();
         break;
     }
-
+    case Action::USE_WEAPON: {
+        int weapon_id     = shared_block->hip_mailbox.weapon_id;
+        int weapon_damage = shared_block->state.players[attacker_id].getInventory().getEquippedWeapons().at(weapon_id).getDamage();
+        shared_block->state.enemies[target_id].TakeDamage(weapon_damage);
+        if (!shared_block->state.enemies[target_id].isAlive()) {
+            release_artifact_from_enemy(shared_block, target_id);
+            shared_block->state.enemies_defeated++;
+            shared_block->state.num_active_enemies--;
+            std::cout << "[ARBITER] Enemy " << target_id << " eliminated by weapon!\n";
+        }
+        shared_block->state.players[attacker_id].ResetStamina();
+        break;
+    }
+    case Action::SWAP_IN: {
+        int weapon_id = shared_block->hip_mailbox.weapon_id;
+        shared_block->state.players[attacker_id].swapInFromBackpack(weapon_id);
+        shared_block->state.players[attacker_id].ResetStamina();
+        break;
+    }
     case Action::HEAL: {
-        int current_hp = shared_block->state.players[attacker_id].getHp();
-        // Heal 10% of max HP, but not above max HP
         int heal_amount = shared_block->state.players[attacker_id].getMaxHp() / 10;
         shared_block->state.players[attacker_id].RegainHealth(heal_amount);
         shared_block->state.players[attacker_id].ResetStamina();
         break;
     }
-
     case Action::SKIP: {
-        shared_block->state.players[attacker_id].setStamina(shared_block->state.players[attacker_id].getMaxStamina() / 2);
+        int half = shared_block->state.players[attacker_id].getMaxStamina() / 2;
+        shared_block->state.players[attacker_id].setStamina(half);
         break;
     }
-
     case Action::SETUP_GAME: {
-        // create number of players
         shared_block->state.num_active_players = shared_block->hip_mailbox.target_id;
-        for(int i = 0; i < shared_block->state.num_active_players; i++){
+        for (int i = 0; i < shared_block->state.num_active_players; i++)
             shared_block->state.players[i] = Player(shared_block->hip_mailbox.types[i]);
-        }
-        break; // <--- This break was missing in your original code!
+        break;
     }
-
+    case Action::GET_ARTIFACT: {
+        int desired_weapon_id = shared_block->hip_mailbox.weapon_id;
+        pthread_mutex_lock(&shared_block->resource_table_mutex);
+        int art_idx = find_artifact_idx(shared_block, desired_weapon_id);
+        if (art_idx == -1) {
+            std::cout << "[ARBITER][ARTIFACT] Player requested non-existent artifact. Ignored.\n";
+            pthread_mutex_unlock(&shared_block->resource_table_mutex);
+            break;
+        }
+        bool granted = try_grant_artifact_to_player(shared_block, attacker_id, art_idx);
+        pthread_mutex_unlock(&shared_block->resource_table_mutex);
+        if (granted) shared_block->state.players[attacker_id].ResetStamina();
+        break;
+    }
+    case Action::RELEASE_ARTIFACT: {
+        pthread_mutex_lock(&shared_block->resource_table_mutex);
+        release_artifact_from_player(shared_block, attacker_id);
+        pthread_mutex_unlock(&shared_block->resource_table_mutex);
+        shared_block->state.players[attacker_id].ResetStamina();
+        break;
+    }
     default:
         break;
     }
@@ -278,56 +294,148 @@ void handle_enemy_action(const ActionRequest& request, SharedMemoryBlock* shared
     int target_id   = shared_block->asp_mailbox.target_id;
 
     switch (request.action_type) {
-        case Action::STRIKE: {
-            int damage = shared_block->state.enemies[attacker_id].getDemage();
-            shared_block->state.players[target_id].TakeDamage(damage);
-
-            // Check if the player died
-            if (!shared_block->state.players[target_id].isAlive()) {
-                shared_block->state.num_active_players--; // Reduce count of living players
-                std::cout << "[ARBITER] Player " << target_id << " has fallen! Active players: "
-                          << shared_block->state.num_active_players << std::endl;
-            }
-            shared_block->state.enemies[attacker_id].ResetStamina();
+    case Action::STRIKE: {
+        int damage = shared_block->state.enemies[attacker_id].getDemage();
+        shared_block->state.players[target_id].TakeDamage(damage);
+        if (!shared_block->state.players[target_id].isAlive()) {
+            shared_block->state.num_active_players--;
+            std::cout << "[ARBITER] Player " << target_id << " has fallen! Active: " << shared_block->state.num_active_players << "\n";
+        }
+        shared_block->state.enemies[attacker_id].ResetStamina();
+        break;
+    }
+    case Action::SKIP: {
+        int half = shared_block->state.enemies[attacker_id].getMaxStamina() / 2;
+        shared_block->state.enemies[attacker_id].setStamina(half);
+        break;
+    }
+    case Action::GET_ARTIFACT: {
+        int desired_weapon_id = shared_block->asp_mailbox.weapon_id;
+        pthread_mutex_lock(&shared_block->resource_table_mutex);
+        int art_idx = find_artifact_idx(shared_block, desired_weapon_id);
+        if (art_idx == -1) {
+            std::cout << "[ARBITER][ARTIFACT] Enemy requested non-existent artifact. Ignored.\n";
+            pthread_mutex_unlock(&shared_block->resource_table_mutex);
             break;
         }
-
-        case Action::SKIP: {
-            shared_block->state.enemies[attacker_id].setStamina(shared_block->state.enemies[attacker_id].getMaxStamina() / 2);
-            break;
-        }
-
-        default:
-            break;
+        bool granted = try_grant_artifact_to_enemy(shared_block, attacker_id, art_idx);
+        pthread_mutex_unlock(&shared_block->resource_table_mutex);
+        if (granted) shared_block->state.enemies[attacker_id].ResetStamina();
+        break;
+    }
+    case Action::RELEASE_ARTIFACT: {
+        pthread_mutex_lock(&shared_block->resource_table_mutex);
+        release_artifact_from_enemy(shared_block, attacker_id);
+        pthread_mutex_unlock(&shared_block->resource_table_mutex);
+        shared_block->state.enemies[attacker_id].ResetStamina();
+        break;
+    }
+    default:
+        break;
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  DEADLOCK WATCHDOG THREAD
+// ─────────────────────────────────────────────────────────────────────────────
+
+static inline int holder_of(SharedMemoryBlock* sb, int art_idx) {
+    if (art_idx < 0 || art_idx >= sb->state.num_artifacts) return -1;
+    return sb->state.artifacts[art_idx].isHeld() ? sb->state.artifacts[art_idx].getHolder() : -1;
+}
+
+static int waiting_for(SharedMemoryBlock* sb, int entity_id) {
+    if (entity_id >= 0 && entity_id < 4) return sb->state.players_artifact_state[entity_id].waiting_for_artifact_idx;
+    if (entity_id >= 10 && entity_id < 19) return sb->state.enemies_artifact_state[entity_id - 10].waiting_for_artifact_idx;
+    return -1;
+}
+
+static void force_abandon_wait(SharedMemoryBlock* sb, int entity_id) {
+    if (entity_id >= 0 && entity_id < 4) {
+        int art_idx = sb->state.players_artifact_state[entity_id].waiting_for_artifact_idx;
+        sb->state.players_artifact_state[entity_id].waiting_for_artifact_idx = -1;
+        int half = sb->state.players[entity_id].getMaxStamina() / 2;
+        sb->state.players[entity_id].setStamina(half);
+        std::cout << "[ARBITER][DEADLOCK] Forced Player " << entity_id << " to abandon wait for artifact " << art_idx << ".\n";
+    }
+    else if (entity_id >= 10 && entity_id < 19) {
+        int ei = entity_id - 10;
+        int art_idx = sb->state.enemies_artifact_state[ei].waiting_for_artifact_idx;
+        sb->state.enemies_artifact_state[ei].waiting_for_artifact_idx = -1;
+        int half = sb->state.enemies[ei].getMaxStamina() / 2;
+        sb->state.enemies[ei].setStamina(half);
+        std::cout << "[ARBITER][DEADLOCK] Forced Enemy " << ei << " to abandon wait for artifact " << art_idx << ".\n";
+    }
+}
+
+void* deadlock_detection(void* arg) {
+    auto* sb = static_cast<SharedMemoryBlock*>(arg);
+    while (true) {
+        sleep(5);
+        if (!sb->state.game_running) break;
+
+        pthread_mutex_lock(&sb->resource_table_mutex);
+        bool deadlock_found = false;
+        int waiters[13];
+        int num_waiters = 0;
+
+        for (int p = 0; p < sb->state.num_active_players; ++p) {
+            if (sb->state.players_artifact_state[p].waiting_for_artifact_idx != -1)
+                waiters[num_waiters++] = p;
+        }
+        for (int e = 0; e < sb->state.num_active_enemies; ++e) {
+            if (sb->state.enemies_artifact_state[e].waiting_for_artifact_idx != -1)
+                waiters[num_waiters++] = 10 + e;
+        }
+
+        for (int i = 0; i < num_waiters && !deadlock_found; ++i) {
+            int entity_A = waiters[i];
+            int art_X    = waiting_for(sb, entity_A);
+            int entity_B = holder_of(sb, art_X);
+            if (entity_B == -1) continue;
+            int art_Y    = waiting_for(sb, entity_B);
+            if (art_Y == -1) continue;
+            int entity_C = holder_of(sb, art_Y);
+            if (entity_C != entity_A) continue;
+
+            std::cout << "[ARBITER][DEADLOCK] *** CIRCULAR WAIT DETECTED ***\n"
+                      << "  Entity " << entity_A << " waiting for artifact " << art_X << " (held by " << entity_B << ")\n"
+                      << "  Entity " << entity_B << " waiting for artifact " << art_Y << " (held by " << entity_A << ")\n"
+                      << "[ARBITER][DEADLOCK] Resolution: forcing entity " << entity_A << " to abandon its wait.\n";
+            force_abandon_wait(sb, entity_A);
+            deadlock_found = true;
+        }
+        if (!deadlock_found) std::cout << "[ARBITER][DEADLOCK] Watchdog tick: no deadlock detected.\n";
+        pthread_mutex_unlock(&sb->resource_table_mutex);
+
+        pthread_mutex_lock(&sb->global_mutex);
+        pthread_cond_broadcast(&sb->turn_condition);
+        pthread_mutex_unlock(&sb->global_mutex);
+    }
+    return nullptr;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  MAIN KERNEL LOOP
+// ─────────────────────────────────────────────────────────────────────────────
 
 bool need_more_enemies(const SharedMemoryBlock* shared_block) {
-
     for (int i = 0; i < shared_block->state.num_active_enemies; ++i) {
-        if (shared_block->state.enemies[i].isAlive()) {
-            return false; // Found an alive enemy, no need for more
-        }
+        if (shared_block->state.enemies[i].isAlive()) return false;
     }
-    return true; // All enemies are dead, we need more
+    return true;
 }
 
-
-int main(int argc, char* argv[])
-{
-    // 1. Setup
+int main(int argc, char* argv[]) {
     unsigned int seed = std::hash<std::string>{}("24I0607");
     srand(seed);
     pthread_t stamina_accumalator, deadlock_detector;
 
-    // 2. Shared Memory
     const char* shm_name = "/game_state_shm";
     shm_unlink(shm_name);
     SharedMem master_shm(shm_name, sizeof(SharedMemoryBlock), true, true);
     SharedMemoryBlock* shared_block = static_cast<SharedMemoryBlock*>(master_shm.getPtr());
 
-    // 3. Sync Primitives
     pthread_mutexattr_t mutex_attr;
     pthread_mutexattr_init(&mutex_attr);
     pthread_mutexattr_setpshared(&mutex_attr, PTHREAD_PROCESS_SHARED);
@@ -339,22 +447,17 @@ int main(int argc, char* argv[])
     pthread_condattr_setpshared(&cond_attr, PTHREAD_PROCESS_SHARED);
     pthread_cond_init(&shared_block->turn_condition, &cond_attr);
 
-    // 4. Initial State
     shared_block->state.game_running = true;
     shared_block->state.level = 1;
     shared_block->state.sublevel = 1;
     shared_block->state.enemies_defeated = 0;
     Arbiter arbiter(shared_block);
 
-    // 5. Processes
     pid_t hip_pid = fork();
     if (hip_pid == 0) { execl("./hip.out", "./hip.out", shm_name, nullptr); return 1; }
-
     pid_t asp_pid = fork();
     if (asp_pid == 0) { execl("./asp.out", "./asp.out", shm_name, nullptr); return 1; }
 
-    // --- PHASE 6: BOOTSTRAP (Setup Players & Enemies) ---
-    // A. Wait for HIP to define players
     pthread_mutex_lock(&shared_block->global_mutex);
     shared_block->state.current_turn_owner_id = -2;
     pthread_cond_broadcast(&shared_block->turn_condition);
@@ -363,21 +466,15 @@ int main(int argc, char* argv[])
     }
     handle_player_action(shared_block->hip_mailbox, shared_block);
 
-    // B. Arbiter parses Level 1, Sublevel 1 to create the first enemy wave
     arbiter.initialize_entities(240607, 7, 7, shared_block->state.level, shared_block->state.sublevel);
-
     shared_block->hip_mailbox.is_ready = false;
     pthread_mutex_unlock(&shared_block->global_mutex);
 
-    // --- PHASE 7: IGNITE THREADS ---
     pthread_create(&stamina_accumalator, NULL, stamina_recovery, shared_block);
-    pthread_create(&deadlock_detector, NULL, deadlock_detection, NULL);
+    pthread_create(&deadlock_detector, NULL, deadlock_detection, shared_block);
 
-    // --- PHASE 8: MAIN EVENT LOOP ---
     while (shared_block->state.game_running) {
         pthread_mutex_lock(&shared_block->global_mutex);
-
-        // --- NORMAL SCHEDULING ---
         int turn_index = -1;
         bool is_player = false;
         arbiter.find_turn(&turn_index, &is_player);
@@ -400,7 +497,6 @@ int main(int argc, char* argv[])
                 while (!shared_block->asp_mailbox.is_ready && res != ETIMEDOUT) {
                     res = pthread_cond_timedwait(&shared_block->turn_condition, &shared_block->global_mutex, &ts);
                 }
-
                 if (res == ETIMEDOUT && !shared_block->asp_mailbox.is_ready) {
                     shared_block->asp_mailbox.action_type = Action::SKIP;
                     shared_block->asp_mailbox.requesting_entity_id = turn_index;
@@ -408,63 +504,42 @@ int main(int argc, char* argv[])
                 handle_enemy_action(shared_block->asp_mailbox, shared_block);
             }
 
-            // Flush mailboxes for the next turn
             shared_block->hip_mailbox.is_ready = false;
             shared_block->asp_mailbox.is_ready = false;
 
-            // --- ENDGAME CONDITIONS ---
             if (shared_block->state.enemies_defeated >= 10) {
-                std::cout << "[ARBITER] 10 Enemies Slain. Objective Complete. YOU WIN!" << std::endl;
+                std::cout << "[ARBITER] 10 Enemies Slain. Objective Complete. YOU WIN!\n";
                 shared_block->state.game_running = false;
-                shared_block->state.game_result = true; // Player wins
+                shared_block->state.game_result = true;
                 break;
             } else if (shared_block->state.num_active_players == 0) {
-                std::cout << "[ARBITER] All players have fallen. YOU LOSE!" << std::endl;
+                std::cout << "[ARBITER] All players have fallen. YOU LOSE!\n";
                 shared_block->state.game_running = false;
-                shared_block->state.game_result = false; // Enemy wins
+                shared_block->state.game_result = false;
                 break;
             }
 
-            // --- WAVE PROGRESSION (SUBLEVELS) ---
             if(need_more_enemies(shared_block)) {
-                // 1. Set the flag. This immediately freezes the stamina thread.
                 shared_block->state.hassublevelended = true;
                 shared_block->state.sublevel++;
-
-                std::cout << "[ARBITER] Wave cleared! Loading Sublevel " << shared_block->state.sublevel << "..." << std::endl;
-
-                // 2. Parse the next text file & setup enemies
+                std::cout << "[ARBITER] Wave cleared! Loading Sublevel " << shared_block->state.sublevel << "...\n";
                 arbiter.initialize_entities(240607, 7, 7, shared_block->state.level, shared_block->state.sublevel);
-
-                for(int i = 0; i < shared_block->state.num_active_players; ++i) {
-                     shared_block->state.players[i].setStamina(0);
-                }
-
+                for(int i = 0; i < shared_block->state.num_active_players; ++i) shared_block->state.players[i].setStamina(0);
                 kill(asp_pid, SIGUSR1);
-
-                // --- 3. THE CONDWAIT PAUSE SHI ---
-                // Signal the HIP that it's time to animate (using -3 as the UI state)
                 shared_block->state.current_turn_owner_id = -3;
                 pthread_cond_broadcast(&shared_block->turn_condition);
-
-                std::cout << "[ARBITER] Pausing kernel. Waiting for HIP to render transition..." << std::endl;
-
-                // 4. Sleep until the HIP tells us it is done animating
+                std::cout << "[ARBITER] Pausing kernel. Waiting for HIP to render transition...\n";
                 while (shared_block->state.hassublevelended) {
                     pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
                 }
-
-                std::cout << "[ARBITER] HIP rendering complete. Resuming combat!" << std::endl;
+                std::cout << "[ARBITER] HIP rendering complete. Resuming combat!\n";
             }
-
             shared_block->state.turn_count++;
         }
-
         pthread_mutex_unlock(&shared_block->global_mutex);
         usleep(10000);
     }
 
-    // --- PHASE 9: CLEANUP ---
     kill(hip_pid, SIGTERM);
     kill(asp_pid, SIGTERM);
     waitpid(hip_pid, NULL, 0);
