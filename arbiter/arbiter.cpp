@@ -118,6 +118,9 @@ public:
                 for (int i = 0; i < num_enemies; ++i) {
                     int x, y, type;
                     if (infile >> x >> y >> type) {
+                        // FIX: Use placement new to construct the object's vtable in shared memory!
+                        new (&shared_block->state.enemies[i]) Enemy(i, static_cast<EnemyType>(type));
+
                         shared_block->state.enemies[i].setRollNumber(seed_roll_full, seed_last_dig, seed_last_two);
                         shared_block->state.enemies[i].initRollStats();
                         shared_block->state.enemies[i].setAlive(true);
@@ -141,26 +144,32 @@ public:
 
         if(check_players_first) {
             for(int i = 0; i < num_players; ++i) {
-                if (!shared_block->state.players[i].isAlive() || shared_block->state.players[i].isStunned()) continue;
+                // FIX: Ignore players who are blocked waiting for an artifact
+                if (!shared_block->state.players[i].isAlive() || shared_block->state.players[i].isStunned() ||
+                    shared_block->state.players_artifact_state[i].waiting_for_artifact_idx != -1) continue;
                 if(shared_block->state.players[i].getStamina() >= shared_block->state.players[i].getMaxStamina()) {
                     *out_turn_index = i; *out_turn = true; return;
                 }
             }
             for(int i = 0; i < num_enemies; ++i) {
-                if (!shared_block->state.enemies[i].isAlive() || shared_block->state.enemies[i].isStunned()) continue;
+                // FIX: Ignore enemies who are blocked waiting for an artifact
+                if (!shared_block->state.enemies[i].isAlive() || shared_block->state.enemies[i].isStunned() ||
+                    shared_block->state.enemies_artifact_state[i].waiting_for_artifact_idx != -1) continue;
                 if(shared_block->state.enemies[i].getStamina() >= shared_block->state.enemies[i].getMaxStamina()) {
                     *out_turn_index = num_players + i; *out_turn = false; return;
                 }
             }
         } else {
             for(int i = 0; i < num_enemies; ++i) {
-                if (!shared_block->state.enemies[i].isAlive() || shared_block->state.enemies[i].isStunned()) continue;
+                if (!shared_block->state.enemies[i].isAlive() || shared_block->state.enemies[i].isStunned() ||
+                    shared_block->state.enemies_artifact_state[i].waiting_for_artifact_idx != -1) continue;
                 if(shared_block->state.enemies[i].getStamina() >= shared_block->state.enemies[i].getMaxStamina()) {
                     *out_turn_index = num_players + i; *out_turn = false; return;
                 }
             }
             for(int i = 0; i < num_players; ++i) {
-                if (!shared_block->state.players[i].isAlive() || shared_block->state.players[i].isStunned()) continue;
+                if (!shared_block->state.players[i].isAlive() || shared_block->state.players[i].isStunned() ||
+                    shared_block->state.players_artifact_state[i].waiting_for_artifact_idx != -1) continue;
                 if(shared_block->state.players[i].getStamina() >= shared_block->state.players[i].getMaxStamina()) {
                     *out_turn_index = i; *out_turn = true; return;
                 }
@@ -211,6 +220,12 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
     case Action::STRIKE: {
         int damage = shared_block->state.players[attacker_id].getDemage();
         shared_block->state.enemies[target_id].TakeDamage(damage);
+
+    // ADD THIS LINE:
+        std::cout << "[ARBITER] Player " << attacker_id << " struck Enemy " << target_id
+          << " for " << damage << " DMG! (Enemy HP: " << shared_block->state.enemies[target_id].getHp() << ")\n";
+
+
         if (!shared_block->state.enemies[target_id].isAlive()) {
             release_artifact_from_enemy(shared_block, target_id);
             shared_block->state.enemies_defeated++;
@@ -259,8 +274,14 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
     }
     case Action::SETUP_GAME: {
         shared_block->state.num_active_players = shared_block->hip_mailbox.target_id;
-        for (int i = 0; i < shared_block->state.num_active_players; i++)
-            shared_block->state.players[i] = Player(shared_block->hip_mailbox.types[i]);
+        for (int i = 0; i < shared_block->state.num_active_players; i++) {
+            // FIX: Use placement new for players too!
+            new (&shared_block->state.players[i]) Player(shared_block->hip_mailbox.types[i]);
+
+            // FIX: We also need to initialize their stats, which was missing earlier
+            shared_block->state.players[i].setRollNumber(240607, 7, 7);
+            shared_block->state.players[i].initRollStats(100.0f / shared_block->state.num_active_players);
+        }
         break;
     }
     case Action::GET_ARTIFACT: {
@@ -297,6 +318,11 @@ void handle_enemy_action(const ActionRequest& request, SharedMemoryBlock* shared
     case Action::STRIKE: {
         int damage = shared_block->state.enemies[attacker_id].getDemage();
         shared_block->state.players[target_id].TakeDamage(damage);
+
+        // ADD THIS LINE:
+        std::cout << "[ARBITER] Enemy " << attacker_id << " struck Player " << target_id
+          << " for " << damage << " DMG! (Player HP: " << shared_block->state.players[target_id].getHp() << ")\n";
+
         if (!shared_block->state.players[target_id].isAlive()) {
             shared_block->state.num_active_players--;
             std::cout << "[ARBITER] Player " << target_id << " has fallen! Active: " << shared_block->state.num_active_players << "\n";
@@ -455,13 +481,13 @@ int main(int argc, char* argv[]) {
 
     pid_t hip_pid = fork();
     if (hip_pid == 0) { execl("./hip.out", "./hip.out", shm_name, nullptr);
-        cout<<"Could not launch HIP process. Make sure hip.out is compiled and in the same directory."<<endl; 
+        cout<<"Could not launch HIP process. Make sure hip.out is compiled and in the same directory."<<endl;
         return 1;
      }
     pid_t asp_pid = fork();
-    if (asp_pid == 0) { execl("./asp.out", "./asp.out", shm_name, nullptr); 
-        cout<<"Could not launch ASP process. Make sure asp.out is compiled and in the same directory."<<endl; 
-        return 1; 
+    if (asp_pid == 0) { execl("./asp.out", "./asp.out", shm_name, nullptr);
+        cout<<"Could not launch ASP process. Make sure asp.out is compiled and in the same directory."<<endl;
+        return 1;
     }
 
     pthread_mutex_lock(&shared_block->global_mutex);
@@ -475,6 +501,11 @@ int main(int argc, char* argv[]) {
     arbiter.initialize_entities(240607, 7, 7, shared_block->state.level, shared_block->state.sublevel);
     shared_block->hip_mailbox.is_ready = false;
     pthread_mutex_unlock(&shared_block->global_mutex);
+
+// --- INJECT ARTIFACTS FOR TESTING ---
+    shared_block->state.num_artifacts = 2;
+    new (&shared_block->state.artifacts[0]) Artifact(0, ArtifactType::SOLAR_CORE, "Solar Core", 95, 10);
+    new (&shared_block->state.artifacts[1]) Artifact(1, ArtifactType::LUNAR_BLADE, "Lunar Blade", 90, 10);
 
     pthread_create(&stamina_accumalator, NULL, stamina_recovery, shared_block);
     pthread_create(&deadlock_detector, NULL, deadlock_detection, shared_block);
@@ -534,10 +565,11 @@ int main(int argc, char* argv[]) {
                 kill(asp_pid, SIGUSR1);
                 shared_block->state.current_turn_owner_id = -3;
                 pthread_cond_broadcast(&shared_block->turn_condition);
-                std::cout << "[ARBITER] Pausing kernel. Waiting for HIP to render transition...\n";
-                while (shared_block->state.hassublevelended) {
-                    pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
-                }
+                // std::cout << "[ARBITER] Pausing kernel. Waiting for HIP to render transition...\n";
+                // while (shared_block->state.hassublevelended) {
+                //     pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
+                // }
+                shared_block->state.hassublevelended = false;
                 std::cout << "[ARBITER] HIP rendering complete. Resuming combat!\n";
             }
             shared_block->state.turn_count++;
