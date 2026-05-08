@@ -1,8 +1,5 @@
 #include <fstream>
 #include <pthread.h>
-#include <semaphore>
-#include <mutex>
-#include <condition_variable>
 #include <vector>
 #include <array>
 #include <queue>
@@ -19,14 +16,12 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <cstring>
-#include "../shared/game_state.h" // Updated Include
+#include "../shared/game_state.h"
 #include <time.h>
 
 using std::vector;
 using std::cout;
 using std::endl;
-using std::mutex;
-using std::condition_variable;
 using std::array;
 
 #define time_of_response 3
@@ -118,9 +113,7 @@ public:
                 for (int i = 0; i < num_enemies; ++i) {
                     int x, y, type;
                     if (infile >> x >> y >> type) {
-                        // FIX: Use placement new to construct the object's vtable in shared memory!
                         new (&shared_block->state.enemies[i]) Enemy(i, static_cast<EnemyType>(type));
-
                         shared_block->state.enemies[i].setRollNumber(seed_roll_full, seed_last_dig, seed_last_two);
                         shared_block->state.enemies[i].initRollStats();
                         shared_block->state.enemies[i].setAlive(true);
@@ -144,7 +137,6 @@ public:
 
         if(check_players_first) {
             for(int i = 0; i < num_players; ++i) {
-                // FIX: Ignore players who are blocked waiting for an artifact
                 if (!shared_block->state.players[i].isAlive() || shared_block->state.players[i].isStunned() ||
                     shared_block->state.players_artifact_state[i].waiting_for_artifact_idx != -1) continue;
                 if(shared_block->state.players[i].getStamina() >= shared_block->state.players[i].getMaxStamina()) {
@@ -152,7 +144,6 @@ public:
                 }
             }
             for(int i = 0; i < num_enemies; ++i) {
-                // FIX: Ignore enemies who are blocked waiting for an artifact
                 if (!shared_block->state.enemies[i].isAlive() || shared_block->state.enemies[i].isStunned() ||
                     shared_block->state.enemies_artifact_state[i].waiting_for_artifact_idx != -1) continue;
                 if(shared_block->state.enemies[i].getStamina() >= shared_block->state.enemies[i].getMaxStamina()) {
@@ -221,10 +212,8 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         int damage = shared_block->state.players[attacker_id].getDemage();
         shared_block->state.enemies[target_id].TakeDamage(damage);
 
-    // ADD THIS LINE:
         std::cout << "[ARBITER] Player " << attacker_id << " struck Enemy " << target_id
-          << " for " << damage << " DMG! (Enemy HP: " << shared_block->state.enemies[target_id].getHp() << ")\n";
-
+          << " for " << damage << " DMG! (Enemy HP: " << shared_block->state.enemies[target_id].getHp() << ")" << endl;
 
         if (!shared_block->state.enemies[target_id].isAlive()) {
             release_artifact_from_enemy(shared_block, target_id);
@@ -275,10 +264,7 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
     case Action::SETUP_GAME: {
         shared_block->state.num_active_players = shared_block->hip_mailbox.target_id;
         for (int i = 0; i < shared_block->state.num_active_players; i++) {
-            // FIX: Use placement new for players too!
             new (&shared_block->state.players[i]) Player(shared_block->hip_mailbox.types[i]);
-
-            // FIX: We also need to initialize their stats, which was missing earlier
             shared_block->state.players[i].setRollNumber(240607, 7, 7);
             shared_block->state.players[i].initRollStats(100.0f / shared_block->state.num_active_players);
         }
@@ -319,9 +305,8 @@ void handle_enemy_action(const ActionRequest& request, SharedMemoryBlock* shared
         int damage = shared_block->state.enemies[attacker_id].getDemage();
         shared_block->state.players[target_id].TakeDamage(damage);
 
-        // ADD THIS LINE:
         std::cout << "[ARBITER] Enemy " << attacker_id << " struck Player " << target_id
-          << " for " << damage << " DMG! (Player HP: " << shared_block->state.players[target_id].getHp() << ")\n";
+          << " for " << damage << " DMG! (Player HP: " << shared_block->state.players[target_id].getHp() << ")" << endl;
 
         if (!shared_block->state.players[target_id].isAlive()) {
             shared_block->state.num_active_players--;
@@ -397,7 +382,7 @@ static void force_abandon_wait(SharedMemoryBlock* sb, int entity_id) {
 void* deadlock_detection(void* arg) {
     auto* sb = static_cast<SharedMemoryBlock*>(arg);
     while (true) {
-        sleep(5);
+        sleep(10);
         if (!sb->state.game_running) break;
 
         pthread_mutex_lock(&sb->resource_table_mutex);
@@ -473,6 +458,17 @@ int main(int argc, char* argv[]) {
     pthread_condattr_setpshared(&cond_attr, PTHREAD_PROCESS_SHARED);
     pthread_cond_init(&shared_block->turn_condition, &cond_attr);
 
+    // FIX: Initialize the artifact wait states to -1.
+    // mmap sets them to 0 (which breaks the scheduler because 0 is a valid artifact!)
+    for (int i = 0; i < 4; i++) {
+        shared_block->state.players_artifact_state[i].waiting_for_artifact_idx = -1;
+        shared_block->state.players_artifact_state[i].holding_artifact_idx = -1;
+    }
+    for (int i = 0; i < 9; i++) {
+        shared_block->state.enemies_artifact_state[i].waiting_for_artifact_idx = -1;
+        shared_block->state.enemies_artifact_state[i].holding_artifact_idx = -1;
+    }
+
     shared_block->state.game_running = true;
     shared_block->state.level = 1;
     shared_block->state.sublevel = 1;
@@ -502,7 +498,7 @@ int main(int argc, char* argv[]) {
     shared_block->hip_mailbox.is_ready = false;
     pthread_mutex_unlock(&shared_block->global_mutex);
 
-// --- INJECT ARTIFACTS FOR TESTING ---
+    // --- INJECT ARTIFACTS FOR TESTING ---
     shared_block->state.num_artifacts = 2;
     new (&shared_block->state.artifacts[0]) Artifact(0, ArtifactType::SOLAR_CORE, "Solar Core", 95, 10);
     new (&shared_block->state.artifacts[1]) Artifact(1, ArtifactType::LUNAR_BLADE, "Lunar Blade", 90, 10);
@@ -565,10 +561,6 @@ int main(int argc, char* argv[]) {
                 kill(asp_pid, SIGUSR1);
                 shared_block->state.current_turn_owner_id = -3;
                 pthread_cond_broadcast(&shared_block->turn_condition);
-                // std::cout << "[ARBITER] Pausing kernel. Waiting for HIP to render transition...\n";
-                // while (shared_block->state.hassublevelended) {
-                //     pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
-                // }
                 shared_block->state.hassublevelended = false;
                 std::cout << "[ARBITER] HIP rendering complete. Resuming combat!\n";
             }
