@@ -35,29 +35,33 @@ constexpr unsigned FONT_XL = 32;
 // ─────────────────────────────────────────────────────────────────────────────
 //  Layout constants
 // ─────────────────────────────────────────────────────────────────────────────
-constexpr float WIN_W = 1200.f;
+constexpr float WIN_W = 1280.f;
 constexpr float WIN_H = 800.f;
-constexpr float MAP_W = 800.f;
+constexpr float MAP_W = 860.f;
 constexpr float MAP_H = 800.f;
-constexpr float SB_X  = 800.f;
-constexpr float SB_W  = 400.f;
+constexpr float SB_X  = 860.f;
+constexpr float SB_W  = 420.f;
 constexpr float SB_H  = 800.f;
-constexpr float PAD   = 10.f;
-
+constexpr float PAD   = 8.f;
+// Active player section — compressed
 constexpr float SEC_ACTIVE_Y = 0.f;
-constexpr float SEC_ACTIVE_H = 290.f;
+constexpr float SEC_ACTIVE_H = 160.f;   // was 290 — now compact
 
-constexpr float LOG_Y       = SEC_ACTIVE_Y + SEC_ACTIVE_H + 4.f;
-constexpr float LOG_H       = 120.f;
-constexpr float LOG_PREVIEW = 4;
-
-constexpr float BTN_Y = LOG_Y + LOG_H + 4.f;
-constexpr float BTN_H = 30.f;
+// Log — smaller
+constexpr float LOG_Y       = SEC_ACTIVE_Y + SEC_ACTIVE_H + 2.f;
+constexpr float LOG_H       = 72.f;     // was 120
+constexpr float LOG_PREVIEW = 3;
+// Tab buttons
+constexpr float BTN_Y = LOG_Y + LOG_H + 2.f;
+constexpr float BTN_H = 26.f;
 constexpr float BTN_W = (SB_W - PAD * 2 - 4.f) / 3.f;
-
-constexpr float PANEL_Y = BTN_Y + BTN_H + 4.f;
+// Panel — gets the rest of the space
+constexpr float PANEL_Y = BTN_Y + BTN_H + 2.f;
 constexpr float PANEL_H = SB_H - PANEL_Y;
 
+// Enemy card sizing — dynamic, fits 4-9
+constexpr float ENEMY_CARD_H = 70.f;
+constexpr float ENEMY_CARD_GAP = 4.f;
 // ─────────────────────────────────────────────────────────────────────────────
 //  Colours
 // ─────────────────────────────────────────────────────────────────────────────
@@ -353,31 +357,9 @@ private:
         return m_localEnemies[i] ? m_localEnemies[i]->isStunned() : false;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  Weapon helpers — local mode only
-    //  In shm mode weapon data lives in the arbiter, not accessible here
-    // ─────────────────────────────────────────────────────────────────────────
 
-    std::vector<Weapon> getActivePlayerInventory() const
-    {
-        if (isShmMode()) return {};
-        if (m_activeIdx >= (int)m_localPlayers.size()) return {};
-        Player* p = m_localPlayers[m_activeIdx];
-        if (!p) return {};
-        std::vector<Weapon> out;
-        for (const auto& pair : p->getInventory().getEquippedWeapons())
-            out.push_back(pair.second);
-        return out;
-    }
 
-    std::vector<Weapon> getActivePlayerBackpack() const
-    {
-        if (isShmMode()) return {};
-        if (m_activeIdx >= (int)m_localPlayers.size()) return {};
-        Player* p = m_localPlayers[m_activeIdx];
-        if (!p) return {};
-        return p->getBackpack().getWeapons();
-    }
+
 
     // ─────────────────────────────────────────────────────────────────────────
     //  Asset loading
@@ -429,8 +411,51 @@ private:
         if (m_actionCallback)
             m_actionCallback(action, target, weapon);
         else
+
+
             std::cerr << "[Renderer] WARNING: no action callback set!\n";
     }
+std::vector<Weapon> getActivePlayerInventory() const
+{
+    std::vector<Weapon> out;
+
+    if (isShmMode())
+    {
+        if (m_activeIdx < 0 || m_activeIdx >= m_shm->num_active_players)
+            return out;
+        for (const auto& pair :
+             m_shm->players[m_activeIdx].getInventory().getEquippedWeapons())
+            out.push_back(pair.second);   // pair.second is Weapon — same as before
+        return out;
+    }
+
+    if (m_activeIdx >= (int)m_localPlayers.size()) return out;
+    Player* p = m_localPlayers[m_activeIdx];
+    if (!p) return out;
+    for (const auto& pair : p->getInventory().getEquippedWeapons())
+        out.push_back(pair.second);
+    return out;
+}
+
+
+std::vector<Weapon> getActivePlayerBackpack() const
+{
+    if (isShmMode())
+    {
+        if (m_activeIdx < 0 || m_activeIdx >= m_shm->num_active_players)
+            return {};
+        return m_shm->players[m_activeIdx].getBackpack().getWeapons();
+    }
+    if (m_activeIdx >= (int)m_localPlayers.size()) return {};
+    Player* p = m_localPlayers[m_activeIdx];
+    if (!p) return {};
+    return p->getBackpack().getWeapons();
+}
+
+
+
+
+
 
     // ─────────────────────────────────────────────────────────────────────────
     //  handleEvents
@@ -532,55 +557,56 @@ private:
             }
         }
 
-        // ── Mouse click — sidebar tab buttons + log toggle ────────────────────
-        bool mouseDown  = sf::Mouse::isButtonPressed(sf::Mouse::Left);
-        bool clicked    = mouseDown && !m_prevMouseDown;
-        m_prevMouseDown = mouseDown;
 
-        if (clicked)
+
+// ── Mouse click — sidebar tab buttons + log toggle ────────────────────
+bool mouseDown  = sf::Mouse::isButtonPressed(sf::Mouse::Left);
+bool clicked    = mouseDown && !m_prevMouseDown;
+m_prevMouseDown = mouseDown;
+
+if (clicked)
+{
+    sf::Vector2i mp = sf::Mouse::getPosition(m_window);
+    float mx = (float)mp.x;
+    float my = (float)mp.y;
+
+    // ── Tab buttons ───────────────────────────────────────────────────
+    if (my >= BTN_Y && my < BTN_Y + BTN_H)
+    {
+        float b1x = SB_X + PAD;
+        float b2x = b1x + BTN_W + 2.f;
+        float b3x = b2x + BTN_W + 2.f;
+
+        if (mx >= b1x && mx < b1x + BTN_W)
         {
-            sf::Vector2i mp = sf::Mouse::getPosition(m_window);
-            float mx = (float)mp.x;
-            float my = (float)mp.y;
-
-            float b1x = SB_X + PAD;
-            float b2x = b1x + BTN_W + 2.f;
-            float b3x = b2x + BTN_W + 2.f;
-
-            if (mx >= b1x && mx < b1x + BTN_W
-             && my >= BTN_Y && my < BTN_Y + BTN_H)
-            {
-                m_sidebarMode = SidebarMode::ENEMIES;
-                std::cout << "[Renderer] Tab → ENEMIES\n";
-            }
-            if (mx >= b2x && mx < b2x + BTN_W
-             && my >= BTN_Y && my < BTN_Y + BTN_H)
-            {
-                m_sidebarMode = (m_sidebarMode == SidebarMode::INVENTORY)
-                                ? SidebarMode::ENEMIES
-                                : SidebarMode::INVENTORY;
-                std::cout << "[Renderer] Tab → INVENTORY\n";
-            }
-            if (mx >= b3x && mx < b3x + BTN_W
-             && my >= BTN_Y && my < BTN_Y + BTN_H)
-            {
-                m_sidebarMode = (m_sidebarMode == SidebarMode::BACKPACK)
-                                ? SidebarMode::ENEMIES
-                                : SidebarMode::BACKPACK;
-                std::cout << "[Renderer] Tab → BACKPACK\n";
-            }
-
-            float logBtnX = SB_X + SB_W - PAD - 24.f;
-            float logBtnY = LOG_Y + 4.f;
-            if (mx >= logBtnX && mx < logBtnX + 22.f
-             && my >= logBtnY && my < logBtnY + 18.f)
-            {
-                m_logExpanded = !m_logExpanded;
-                std::cout << "[Renderer] Log expanded → "
-                          << (m_logExpanded ? "YES" : "NO") << "\n";
-            }
+            m_sidebarMode = SidebarMode::ENEMIES;
+            std::cout << "[Renderer] Tab -> ENEMIES\n";
+        }
+        else if (mx >= b2x && mx < b2x + BTN_W)
+        {
+            m_sidebarMode = SidebarMode::INVENTORY;
+            std::cout << "[Renderer] Tab -> INVENTORY\n";
+        }
+        else if (mx >= b3x && mx < b3x + BTN_W)
+        {
+            m_sidebarMode = SidebarMode::BACKPACK;
+            std::cout << "[Renderer] Tab -> BACKPACK\n";
         }
     }
+
+    // ── Log toggle button ─────────────────────────────────────────────
+    float logBtnX = SB_X + SB_W - PAD - 24.f;
+    float logBtnY = LOG_Y + 4.f;
+    if (mx >= logBtnX && mx < logBtnX + 22.f
+     && my >= logBtnY && my < logBtnY + 18.f)
+    {
+        m_logExpanded = !m_logExpanded;
+        std::cout << "[Renderer] Log expanded -> "
+                  << (m_logExpanded ? "YES" : "NO") << "\n";
+    }
+}
+
+ }
 
     // ─────────────────────────────────────────────────────────────────────────
     //  drawAll — master draw call, called every frame
@@ -644,19 +670,17 @@ private:
     // ─────────────────────────────────────────────────────────────────────────
     //  drawHUD
     // ─────────────────────────────────────────────────────────────────────────
+void drawHUD()
+{
+    if (isShmMode() && !m_shm->is_player_turn) return;
 
-    void drawHUD()
-    {
-        // Only show controls when it's a player's turn
-        if (isShmMode() && !m_shm->is_player_turn) return;
+    drawRect(0.f, WIN_H - 26.f, MAP_W, 26.f, sf::Color(0, 0, 0, 180));
+    drawText(
+        "SPACE=Strike  W=Weapon  E=Exhaust  H=Heal  TAB=Swap  ESC=Skip   </>=Target  ^/v=Weapon",
+        8.f, WIN_H - 22.f, FONT_XS, Colour::TxtMuted
+    );
+}
 
-        drawRect(0.f, WIN_H - 26.f, MAP_W, 26.f, sf::Color(0, 0, 0, 180));
-        drawText(
-            "SPACE=Strike  W=Weapon  E=Exhaust  H=Heal"
-            "  TAB=Swap  ESC=Skip   ←/→=Target  ↑/↓=Weapon",
-            8.f, WIN_H - 22.f, FONT_XS, Colour::TxtMuted
-        );
-    }
 
     // ─────────────────────────────────────────────────────────────────────────
     //  drawSidebarBg
@@ -671,70 +695,79 @@ private:
     // ─────────────────────────────────────────────────────────────────────────
     //  drawActiveSection — active player's HP / stamina / status
     // ─────────────────────────────────────────────────────────────────────────
+void drawActiveSection()
+{
+    drawRect(SB_X, SEC_ACTIVE_Y, SB_W, SEC_ACTIVE_H, Colour::SectionBg);
+    drawDivider(SEC_ACTIVE_Y + SEC_ACTIVE_H);
 
-    void drawActiveSection()
+    int total = totalPlayerCount();
+    if (total == 0 || m_activeIdx >= total) return;
+
+    float x = SB_X + PAD;
+    float y = SEC_ACTIVE_Y + 6.f;
+
+    // ── Name + status badge on same line ──────────────────────────────────
+    drawText(getPlayerName(m_activeIdx), x, y, FONT_MD, Colour::TxtName);
+    drawStatusBadge(SB_X + SB_W - PAD - 70.f, y + 1.f,
+                    isPlayerAlive(m_activeIdx),
+                    getPlayerStunned(m_activeIdx));
+    y += 24.f;
+
+    // ── HP ────────────────────────────────────────────────────────────────
+    bool  stunned  = getPlayerStunned(m_activeIdx);
+    float hpRatio  = (float)getPlayerHp(m_activeIdx)
+                   / (float)std::max(1, getPlayerMaxHp(m_activeIdx));
+    sf::Color hpCol = stunned ? Colour::StunBadge
+                    : (hpRatio < 0.3f ? Colour::HpLow : Colour::HpFull);
+
+    drawText("HP  " + std::to_string(getPlayerHp(m_activeIdx))
+             + " / " + std::to_string(getPlayerMaxHp(m_activeIdx)),
+             x, y, FONT_XS, Colour::TxtMuted);
+    y += 14.f;
+    drawBar(x, y, SB_W - PAD * 2, 12.f,
+            getPlayerHp(m_activeIdx), getPlayerMaxHp(m_activeIdx),
+            Colour::HpBack, hpCol);
+    y += 18.f;
+
+    // ── Stamina ───────────────────────────────────────────────────────────
+    drawText("STM " + std::to_string(getPlayerStamina(m_activeIdx))
+             + " / " + std::to_string(getPlayerMaxStamina(m_activeIdx)),
+             x, y, FONT_XS, Colour::TxtMuted);
+    y += 14.f;
+    drawBar(x, y, SB_W - PAD * 2, 8.f,
+            getPlayerStamina(m_activeIdx), getPlayerMaxStamina(m_activeIdx),
+            Colour::StamBack, Colour::StamFull);
+    y += 16.f;
+
+    // ── All players mini-row ──────────────────────────────────────────────
+    // Shows every player as a tiny HP bar so you always see party health
+    drawText("PARTY", x, y, FONT_XS, Colour::TxtMuted);
+    y += 14.f;
+
+    float miniW = (SB_W - PAD * 2 - (total - 1) * 4.f) / (float)total;
+    for (int i = 0; i < total; i++)
     {
-        drawRect(SB_X, SEC_ACTIVE_Y, SB_W, SEC_ACTIVE_H, Colour::SectionBg);
-        drawDivider(SEC_ACTIVE_Y + SEC_ACTIVE_H);
+        float mx = x + i * (miniW + 4.f);
+        sf::Color miniCol = (i == m_activeIdx)
+            ? Colour::ActiveTurn
+            : (isPlayerAlive(i) ? Colour::HpFull : Colour::DeadBadge);
 
-        int total = totalPlayerCount();
-        if (total == 0 || m_activeIdx >= total) return;
+        drawBar(mx, y, miniW, 10.f,
+                getPlayerHp(i), std::max(1, getPlayerMaxHp(i)),
+                Colour::HpBack, miniCol);
 
-        float x = SB_X + PAD;
-        float y = SEC_ACTIVE_Y + PAD;
-
-        drawText("ACTIVE PLAYER", x, y, FONT_XS, Colour::TxtMuted);
-        y += 18.f;
-
-        drawText(getPlayerName(m_activeIdx), x, y, FONT_LG, Colour::TxtName);
-        y += 36.f;
-
-        drawStatusBadge(x, y,
-                        isPlayerAlive(m_activeIdx),
-                        getPlayerStunned(m_activeIdx));
-        y += 28.f;
-
-        // HP row
-        drawText("HP", x, y, FONT_XS, Colour::TxtMuted);
-        drawText(
-            std::to_string(getPlayerHp(m_activeIdx)) + " / " +
-            std::to_string(getPlayerMaxHp(m_activeIdx)),
-            SB_X + SB_W - PAD - 72.f, y, FONT_SM, Colour::TxtMuted
-        );
-        y += 18.f;
-
-        bool stunned = getPlayerStunned(m_activeIdx);
-        float hpRatio = (float)getPlayerHp(m_activeIdx)
-                      / (float)getPlayerMaxHp(m_activeIdx);
-        sf::Color hpCol = stunned ? Colour::StunBadge
-                        : (hpRatio < 0.3f ? Colour::HpLow : Colour::HpFull);
-
-        drawBar(x, y, SB_W - PAD * 2, 20.f,
-                getPlayerHp(m_activeIdx), getPlayerMaxHp(m_activeIdx),
-                Colour::HpBack, hpCol);
-        y += 30.f;
-
-        // Stamina row
-        drawText("Stamina", x, y, FONT_XS, Colour::TxtMuted);
-        drawText(
-            std::to_string(getPlayerStamina(m_activeIdx)) + " / " +
-            std::to_string(getPlayerMaxStamina(m_activeIdx)),
-            SB_X + SB_W - PAD - 72.f, y, FONT_SM, Colour::TxtMuted
-        );
-        y += 18.f;
-
-        drawBar(x, y, SB_W - PAD * 2, 14.f,
-                getPlayerStamina(m_activeIdx), getPlayerMaxStamina(m_activeIdx),
-                Colour::StamBack, Colour::StamFull);
-        y += 26.f;
-
-        if (stunned)
-            drawText(
-                "STUNNED  —  clears T" +
-                std::to_string(getPlayerStunEnd(m_activeIdx)),
-                x, y, FONT_SM, Colour::StunBadge
-            );
+        // tiny name under bar
+        std::string abbr = getPlayerName(i).substr(0, 3);
+        drawText(abbr, mx + 2.f, y + 12.f, FONT_XS - 2, Colour::TxtMuted);
     }
+
+    y += 28.f;
+
+    if (stunned)
+        drawText("STUNNED — clears T" + std::to_string(getPlayerStunEnd(m_activeIdx)),
+                 x, y, FONT_XS, Colour::StunBadge);
+}
+
 
     // ─────────────────────────────────────────────────────────────────────────
     //  drawActionLog
@@ -841,157 +874,202 @@ private:
     //  drawEnemySection
     // ─────────────────────────────────────────────────────────────────────────
 
-    void drawEnemySection()
+void drawEnemySection()
+{
+    drawRect(SB_X, PANEL_Y, SB_W, PANEL_H, Colour::SidebarBg);
+
+    int count = totalEnemyCount();
+
+    // Header with count
+    drawText("ENEMIES  [" + std::to_string(aliveEnemyCount())
+             + "/" + std::to_string(count) + " alive]",
+             SB_X + PAD, PANEL_Y + 4.f, FONT_XS, Colour::TxtMuted);
+
+    if (count == 0)
     {
-        drawRect(SB_X, PANEL_Y, SB_W, PANEL_H, Colour::SidebarBg);
-        drawText("ENEMIES", SB_X + PAD, PANEL_Y + 6.f, FONT_XS, Colour::TxtMuted);
-
-        constexpr float CARD_H = 88.f;
-        constexpr float GAP    = 6.f;
-        float cardY = PANEL_Y + 24.f;
-
-        int count = totalEnemyCount();
-        for (int i = 0; i < count; ++i)
-        {
-            if (cardY + CARD_H > PANEL_Y + PANEL_H) break;
-
-            sf::Color cardBg = (i == m_selectedEnemy)
-                               ? sf::Color(60, 55, 20, 200)
-                               : Colour::SectionBg;
-
-            drawRect(SB_X + PAD, cardY, SB_W - PAD * 2, CARD_H,
-                     cardBg, Colour::Divider, 1.f);
-
-            float cx = SB_X + PAD + 8.f;
-            float cy = cardY + 8.f;
-
-            std::string prefix = (i == m_selectedEnemy) ? "> " : "  ";
-            drawText(prefix + getEnemyName(i), cx, cy, FONT_MD, Colour::TxtPrimary);
-
-            bool alive   = isEnemyAlive(i);
-            bool stunned = getEnemyStunned(i);
-            drawStatusBadge(SB_X + SB_W - PAD - 70.f, cy + 1.f, alive, stunned);
-            cy += 26.f;
-
-            int hp    = getEnemyHp(i);
-            int maxhp = getEnemyMaxHp(i);
-
-            drawText("HP", cx, cy, FONT_SM, Colour::TxtMuted);
-            drawText(std::to_string(hp) + " / " + std::to_string(maxhp),
-                     cx + 30.f, cy, FONT_SM, Colour::TxtMuted);
-            cy += 18.f;
-
-            sf::Color eHpCol = stunned
-                ? Colour::StunBadge
-                : ((float)hp / maxhp < 0.3f ? Colour::HpLow : Colour::HpFull);
-
-            drawBar(cx, cy, SB_W - PAD * 2 - 16.f, 12.f,
-                    hp, maxhp, Colour::HpBack, eHpCol);
-
-            cardY += CARD_H + GAP;
-        }
+        drawText("No enemies", SB_X + PAD, PANEL_Y + 24.f, FONT_SM, Colour::TxtMuted);
+        return;
     }
+
+    // Dynamic card height — shrink if many enemies
+    int   visible  = count;
+    float maxH     = PANEL_H - 22.f;
+    float cardH    = std::min(ENEMY_CARD_H,
+                              (maxH - (visible - 1) * ENEMY_CARD_GAP) / (float)visible);
+    cardH          = std::max(cardH, 44.f);   // never smaller than 44px
+
+    float cardY = PANEL_Y + 22.f;
+
+    for (int i = 0; i < count; ++i)
+    {
+        if (cardY + cardH > PANEL_Y + PANEL_H) break;
+
+        bool isSelected = (i == m_selectedEnemy);
+        bool alive      = isEnemyAlive(i);
+        bool stunned    = getEnemyStunned(i);
+
+        sf::Color cardBg = isSelected
+            ? sf::Color(60, 55, 20, 220)
+            : (alive ? Colour::SectionBg : sf::Color(35, 20, 20, 200));
+
+        float cx = SB_X + PAD;
+        float cw = SB_W - PAD * 2;
+        drawRect(cx, cardY, cw, cardH, cardBg, Colour::Divider, 1.f);
+
+        float tx = cx + 6.f;
+        float ty = cardY + 4.f;
+
+        // ── Name + selector arrow ─────────────────────────────────────────
+        std::string prefix = isSelected ? "> " : "  ";
+        sf::Color nameCol  = alive ? Colour::TxtPrimary : Colour::TxtMuted;
+        drawText(prefix + getEnemyName(i), tx, ty, FONT_SM, nameCol);
+
+        // ── Status badge (right side) ─────────────────────────────────────
+        drawStatusBadge(SB_X + SB_W - PAD - 72.f, ty, alive, stunned);
+
+        ty += 20.f;
+
+        // ── HP bar — only if card is tall enough ──────────────────────────
+        if (cardH >= 44.f)
+        {
+            int hp    = getEnemyHp(i);
+            int maxhp = std::max(1, getEnemyMaxHp(i));
+
+            sf::Color eHpCol = !alive   ? Colour::DeadBadge
+                             : stunned  ? Colour::StunBadge
+                             : ((float)hp / maxhp < 0.3f ? Colour::HpLow : Colour::HpFull);
+
+            // HP numbers inline
+            drawText(std::to_string(hp) + "/" + std::to_string(maxhp),
+                     tx, ty, FONT_XS, Colour::TxtMuted);
+            ty += 13.f;
+
+            float barW = cw - 12.f;
+            drawBar(tx, ty, barW, 8.f, hp, maxhp, Colour::HpBack, eHpCol);
+        }
+
+        cardY += cardH + ENEMY_CARD_GAP;
+    }
+}
+
 
     // ─────────────────────────────────────────────────────────────────────────
     //  drawWeaponPanel
     // ─────────────────────────────────────────────────────────────────────────
+void drawWeaponPanel(const std::vector<Weapon>& weapons, const char* header)
+{
+    drawRect(SB_X, PANEL_Y, SB_W, PANEL_H, Colour::SidebarBg);
+    drawText(header, SB_X + PAD, PANEL_Y + 6.f, FONT_XS, Colour::TxtMuted);
 
-    void drawWeaponPanel(const std::vector<Weapon>& weapons, const char* header)
+    // Guard: snapshot the vector size once, never re-query mid-draw
+    const int weaponCount = (int)weapons.size();
+
+    if (weaponCount == 0)
     {
-        drawRect(SB_X, PANEL_Y, SB_W, PANEL_H, Colour::SidebarBg);
-        drawText(header, SB_X + PAD, PANEL_Y + 6.f, FONT_XS, Colour::TxtMuted);
-
-        if (weapons.empty())
-        {
-            std::string msg = isShmMode()
-                ? "Weapon data owned by arbiter"
-                : "Empty";
-            drawText(msg, SB_X + PAD, PANEL_Y + 28.f, FONT_SM, Colour::TxtMuted);
-            return;
-        }
-
-        std::unordered_map<std::string, int> countByName;
-        std::vector<const Weapon*>           unique;
-        for (const Weapon& w : weapons)
-        {
-            if (countByName.find(w.getName()) == countByName.end())
-                unique.push_back(&w);
-            countByName[w.getName()]++;
-        }
-
-        constexpr float CARD_H  = 66.f;
-        constexpr float ICON_SZ = 50.f;
-        constexpr float GAP     = 6.f;
-        float cardY = PANEL_Y + 24.f;
-
-        for (int wi = 0; wi < (int)unique.size(); wi++)
-        {
-            if (cardY + CARD_H > PANEL_Y + PANEL_H) break;
-            const Weapon* w = unique[wi];
-
-            sf::Color cardBg = (wi == m_selectedWeapon)
-                               ? sf::Color(20, 50, 70, 220)
-                               : Colour::WeaponCard;
-
-            float cx = SB_X + PAD;
-            drawRect(cx, cardY, SB_W - PAD * 2, CARD_H,
-                     cardBg, Colour::Divider, 1.f);
-
-            std::string nameKey = w->getName();
-            if (m_weaponTextures.count(nameKey))
-            {
-                sf::Sprite icon(m_weaponTextures.at(nameKey));
-                icon.setPosition(cx + 6.f, cardY + 8.f);
-                icon.setScale(
-                    ICON_SZ / icon.getTexture()->getSize().x,
-                    ICON_SZ / icon.getTexture()->getSize().y
-                );
-                m_window.draw(icon);
-            }
-            else
-            {
-                drawRect(cx + 6.f, cardY + 8.f, ICON_SZ, ICON_SZ,
-                         {60, 60, 100}, Colour::BtnBorder, 1.f);
-                drawText(std::string(1, w->getName()[0]),
-                         cx + 22.f, cardY + 18.f, FONT_LG, Colour::TxtName);
-            }
-
-            float tx = cx + ICON_SZ + 16.f;
-            float ty = cardY + 8.f;
-
-            std::string prefix = (wi == m_selectedWeapon) ? "> " : "  ";
-            drawText(prefix + w->getName(), tx, ty, FONT_SM, Colour::TxtPrimary);
-            ty += 18.f;
-            drawText("DMG: "   + std::to_string(w->getDamage()),
-                     tx, ty, FONT_SM, Colour::DmgColour);
-            ty += 16.f;
-            drawText("Slots: " + std::to_string(w->getSlotSize()),
-                     tx, ty, FONT_XS, Colour::TxtMuted);
-
-            int cnt = countByName[w->getName()];
-            if (cnt > 1)
-            {
-                float badgeX = SB_X + SB_W - PAD - 32.f;
-                float badgeY = cardY + 8.f;
-                drawRect(badgeX, badgeY, 30.f, 20.f, Colour::CountBadge);
-                drawText("x" + std::to_string(cnt),
-                         badgeX + 5.f, badgeY + 3.f,
-                         FONT_XS, sf::Color::Black);
-            }
-
-            cardY += CARD_H + GAP;
-        }
+        drawText("No weapons equipped.",
+                 SB_X + PAD, PANEL_Y + 28.f, FONT_SM, Colour::TxtMuted);
+        return;
     }
 
-    void drawInventoryPanel()
+    // Clamp selected weapon cursor so it never goes out of bounds
+    if (m_selectedWeapon >= weaponCount)
+        m_selectedWeapon = weaponCount - 1;
+    if (m_selectedWeapon < 0)
+        m_selectedWeapon = 0;
+
+    std::unordered_map<std::string, int> countByName;
+    std::vector<const Weapon*>           unique;
+    for (const Weapon& w : weapons)
     {
-        drawWeaponPanel(getActivePlayerInventory(), "INVENTORY");
+        if (countByName.find(w.getName()) == countByName.end())
+            unique.push_back(&w);
+        countByName[w.getName()]++;
     }
 
-    void drawBackpackPanel()
+    constexpr float CARD_H  = 66.f;
+    constexpr float ICON_SZ = 50.f;
+    constexpr float GAP     = 6.f;
+    float cardY = PANEL_Y + 24.f;
+
+    for (int wi = 0; wi < (int)unique.size(); wi++)
     {
-        drawWeaponPanel(getActivePlayerBackpack(), "BACKPACK");
+        if (cardY + CARD_H > PANEL_Y + PANEL_H) break;
+        const Weapon* w = unique[wi];
+
+        sf::Color cardBg = (wi == m_selectedWeapon)
+                           ? sf::Color(20, 50, 70, 220)
+                           : Colour::WeaponCard;
+
+        float cx = SB_X + PAD;
+        drawRect(cx, cardY, SB_W - PAD * 2, CARD_H,
+                 cardBg, Colour::Divider, 1.f);
+
+        std::string nameKey = w->getName();
+        if (m_weaponTextures.count(nameKey))
+        {
+            sf::Sprite icon(m_weaponTextures.at(nameKey));
+            icon.setPosition(cx + 6.f, cardY + 8.f);
+            icon.setScale(
+                ICON_SZ / icon.getTexture()->getSize().x,
+                ICON_SZ / icon.getTexture()->getSize().y
+            );
+            m_window.draw(icon);
+        }
+        else
+        {
+            drawRect(cx + 6.f, cardY + 8.f, ICON_SZ, ICON_SZ,
+                     {60, 60, 100}, Colour::BtnBorder, 1.f);
+            drawText(std::string(1, w->getName()[0]),
+                     cx + 22.f, cardY + 18.f, FONT_LG, Colour::TxtName);
+        }
+
+        float tx = cx + ICON_SZ + 16.f;
+        float ty = cardY + 8.f;
+
+        std::string prefix = (wi == m_selectedWeapon) ? "> " : "  ";
+        drawText(prefix + w->getName(), tx, ty, FONT_SM, Colour::TxtPrimary);
+        ty += 18.f;
+        drawText("DMG: "   + std::to_string(w->getDamage()),
+                 tx, ty, FONT_SM, Colour::DmgColour);
+        ty += 16.f;
+        drawText("Slots: " + std::to_string(w->getSlotSize()),
+                 tx, ty, FONT_XS, Colour::TxtMuted);
+
+        int cnt = countByName[w->getName()];
+        if (cnt > 1)
+        {
+            float badgeX = SB_X + SB_W - PAD - 32.f;
+            float badgeY = cardY + 8.f;
+            drawRect(badgeX, badgeY, 30.f, 20.f, Colour::CountBadge);
+            drawText("x" + std::to_string(cnt),
+                     badgeX + 5.f, badgeY + 3.f,
+                     FONT_XS, sf::Color::Black);
+        }
+
+        cardY += CARD_H + GAP;
     }
+}
+
+void drawInventoryPanel()
+{
+    std::string header = "INVENTORY";
+    if (m_activeIdx >= 0 && m_activeIdx < totalPlayerCount())
+        header = "INVENTORY  [" + getPlayerName(m_activeIdx) + "]";
+
+    drawWeaponPanel(getActivePlayerInventory(), header.c_str());
+}
+
+void drawBackpackPanel()
+{
+    std::string header = "BACKPACK (LTS)";
+    if (m_activeIdx >= 0 && m_activeIdx < totalPlayerCount())
+        header = "BACKPACK  [" + getPlayerName(m_activeIdx) + "]";
+
+    drawWeaponPanel(getActivePlayerBackpack(), header.c_str());
+}
+
+
+
 
     // ─────────────────────────────────────────────────────────────────────────
     //  Primitive helpers

@@ -233,7 +233,14 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
     }
     case Action::USE_WEAPON: {
         int weapon_id     = shared_block->hip_mailbox.weapon_id;
-        int weapon_damage = shared_block->state.players[attacker_id].getInventory().getEquippedWeapons().at(weapon_id).getDamage();
+Weapon w;
+int weapon_damage = 0;
+if (shared_block->state.players[attacker_id]
+        .getInventory().getWeaponById(weapon_id, w))
+{
+    weapon_damage = w.getDamage();
+}
+
         shared_block->state.enemies[target_id].TakeDamage(weapon_damage);
         if (!shared_block->state.enemies[target_id].isAlive()) {
             release_artifact_from_enemy(shared_block, target_id);

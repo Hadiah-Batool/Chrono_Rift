@@ -36,6 +36,7 @@ public:
     {
         nextWeaponId = 1;
         setAttributes();
+        loadDefaultInventory();
     }
 
     void setAttributes()
@@ -258,6 +259,59 @@ public:
         file.close();
         return path_to_follow;
     }
-    //ATTACK EM BEES
+    
+// In Player.h — add this method
+void loadDefaultInventory()
+{
+    // Each weapon gets a unique ID via generateWeaponId()
+    // Slots must sum to exactly 20
+
+    switch (playerType)
+    {
+        case PlayerType::CHRONO:
+        {
+            // Iron Halberd(7) + Thunderstaff(6) + Obsidian Axe(5) + Splinter Stick(2) = 20
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::IRON_HALBERD,   "Iron Halberd",   7, 55));
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::THUNDERSTAFF,     "Thunderstaff",   6, 50));
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::OBSIDIAN_AXE,       "Obsidian Axe",   5, 45));
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::SPLINTER_STICK,    "Splinter Stick", 2, 12));
+            break;
+        }
+        case PlayerType::FROG:
+        {
+            // Frostbow(6) + Thunderstaff(6) + Venom Dagger(4) + Splinter Stick(2) + Splinter Stick(2) = 20
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::FROSTBOW,       "Frostbow",       6, 48));
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::THUNDERSTAFF,     "Thunderstaff",   6, 50));
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::VENOM_DAGGER,    "Venom Dagger",   4, 30));
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::SPLINTER_STICK,    "Splinter Stick", 2, 12));
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::SPLINTER_STICK,    "Splinter Stick", 2, 12));
+            break;
+        }
+        case PlayerType::MARLE:
+        {
+            // Iron Halberd(7) + Obsidian Axe(5) + Venom Dagger(4) + Splinter Stick(2) + Splinter Stick(2) = 20
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::IRON_HALBERD,   "Iron Halberd",   7, 55));
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::OBSIDIAN_AXE,       "Obsidian Axe",   5, 45));
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::VENOM_DAGGER,    "Venom Dagger",   4, 30));
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::SPLINTER_STICK,    "Splinter Stick", 2, 12));
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::SPLINTER_STICK,    "Splinter Stick", 2, 12));
+            break;
+        }
+        case PlayerType::MAGUS:
+        {
+            // Iron Halberd(7) + Frostbow(6) + Obsidian Axe(5) + Splinter Stick(2) = 20
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::IRON_HALBERD,   "Iron Halberd",   7, 55));
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::FROSTBOW,       "Frostbow",       6, 48));
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::OBSIDIAN_AXE,       "Obsidian Axe",   5, 45));
+            inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::SPLINTER_STICK,    "Splinter Stick", 2, 12));
+            break;
+        }
+        default: break;
+    }
+}
+
+    
+    
+
 
 };

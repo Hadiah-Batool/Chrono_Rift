@@ -10,8 +10,11 @@
 #include <vector>
 #include <signal.h>
 #include <functional>
+#include <SFML/Graphics.hpp>
 #include "../shared/game_state.h"
 #include "../resources/shared_mem_abs.h"
+#include "../DisplayRendering/render.h"
+#include "../DisplayRendering/Menu.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ActionSlot — one per player
@@ -35,16 +38,17 @@ struct PlayerThreadCtx
 {
     int                playerIndex;
     SharedMemoryBlock* shm;
-    ActionSlot* slot;
-    HIPContext* ctx;
+    ActionSlot*        slot;
+    HIPContext*        ctx;
 };
 
 struct HIPContext
 {
-    SharedMemoryBlock* shm;
+    SharedMemoryBlock*           shm;
+    Renderer*                    renderer;
     int                          numPlayers;
-    int                          running;        // Pure int!
-    pthread_mutex_t              running_mutex;  // POSIX Mutex!
+    int                          running;
+    pthread_mutex_t              running_mutex;
     std::vector<ActionSlot>      slots;
     std::vector<pthread_t>       playerTids;
     std::vector<PlayerThreadCtx> playerCtxs;
@@ -96,7 +100,6 @@ static void submitAction(HIPContext* ctx, Action action, int targetIdx, int weap
     bool isPlayerTurn = ctx->shm->state.is_player_turn;
     int  active       = ctx->shm->state.current_turn_owner_id;
     pthread_mutex_unlock(&ctx->shm->global_mutex);
-    usleep(10000);
 
     if (!isPlayerTurn || active < 0 || active >= ctx->numPlayers) return;
 
@@ -110,9 +113,12 @@ static void submitAction(HIPContext* ctx, Action action, int targetIdx, int weap
     pthread_mutex_unlock(&slot->mutex);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  setupThread
+// ─────────────────────────────────────────────────────────────────────────────
 static void* setupThread(void* args)
 {
-    HIPContext* ctx   = (HIPContext*)args;
+    HIPContext*        ctx   = (HIPContext*)args;
     SharedMemoryBlock* block = ctx->shm;
 
     pthread_mutex_lock(&block->global_mutex);
@@ -137,7 +143,8 @@ static void* setupThread(void* args)
 // ─────────────────────────────────────────────────────────────────────────────
 //  waitForAction
 // ─────────────────────────────────────────────────────────────────────────────
-static void waitForAction(ActionSlot* slot, HIPContext* ctx, Action& action, int& targetIdx, int& weaponIdx)
+static void waitForAction(ActionSlot* slot, HIPContext* ctx,
+                          Action& action, int& targetIdx, int& weaponIdx)
 {
     pthread_mutex_lock(&slot->mutex);
     while (!slot->ready && get_running(ctx))
@@ -155,8 +162,8 @@ static void waitForAction(ActionSlot* slot, HIPContext* ctx, Action& action, int
 // ─────────────────────────────────────────────────────────────────────────────
 static void* playerThreadFunc(void* arg)
 {
-    PlayerThreadCtx* pctx = (PlayerThreadCtx*)arg;
-    HIPContext* ctx  = pctx->ctx;
+    PlayerThreadCtx*   pctx = (PlayerThreadCtx*)arg;
+    HIPContext*        ctx  = pctx->ctx;
     SharedMemoryBlock* shm  = ctx->shm;
     const int          me   = pctx->playerIndex;
 
@@ -166,7 +173,8 @@ static void* playerThreadFunc(void* arg)
         pthread_mutex_lock(&shm->global_mutex);
         while (get_running(ctx))
         {
-            if (shm->state.is_player_turn && shm->state.current_turn_owner_id == me) break;
+            if (shm->state.is_player_turn &&
+                shm->state.current_turn_owner_id == me) break;
             pthread_cond_wait(&shm->turn_condition, &shm->global_mutex);
         }
         pthread_mutex_unlock(&shm->global_mutex);
@@ -179,7 +187,7 @@ static void* playerThreadFunc(void* arg)
 
         // 3. Wait for renderer keypress
         Action action;
-        int targetIdx, weaponIdx;
+        int    targetIdx, weaponIdx;
         waitForAction(pctx->slot, ctx, action, targetIdx, weaponIdx);
         if (!get_running(ctx)) break;
 
@@ -190,7 +198,8 @@ static void* playerThreadFunc(void* arg)
         shm->hip_mailbox.target_id            = targetIdx;
         shm->hip_mailbox.weapon_id            = weaponIdx;
         shm->hip_mailbox.is_ready             = true;
-        pushLog(shm, "Player %d act=%d tgt=%d wpn=%d", me, static_cast<int>(action), targetIdx, weaponIdx);
+        pushLog(shm, "Player %d act=%d tgt=%d wpn=%d",
+                me, static_cast<int>(action), targetIdx, weaponIdx);
         pthread_cond_broadcast(&shm->turn_condition);
         pthread_mutex_unlock(&shm->global_mutex);
     }
@@ -211,8 +220,10 @@ static void spawnPlayerThreads(HIPContext* ctx)
         ActionSlot& slot = ctx->slots[i];
         pthread_mutex_init(&slot.mutex, nullptr);
         pthread_cond_init (&slot.cond,  nullptr);
-        slot.ready = false; slot.action = Action::SKIP;
-        slot.targetIdx = -1; slot.weaponIdx = -1;
+        slot.ready     = false;
+        slot.action    = Action::SKIP;
+        slot.targetIdx = -1;
+        slot.weaponIdx = -1;
 
         PlayerThreadCtx& pctx = ctx->playerCtxs[i];
         pctx.playerIndex = i;
@@ -220,12 +231,41 @@ static void spawnPlayerThreads(HIPContext* ctx)
         pctx.slot        = &slot;
         pctx.ctx         = ctx;
 
-        int rc = pthread_create(&ctx->playerTids[i], nullptr, playerThreadFunc, &pctx);
-        if (rc != 0) std::cerr << "[HIP] pthread_create player " << i << " failed: " << strerror(rc) << "\n";
-        else std::cout << "[HIP] Player thread " << i << " spawned\n";
+        int rc = pthread_create(&ctx->playerTids[i], nullptr,
+                                playerThreadFunc, &pctx);
+        if (rc != 0)
+            std::cerr << "[HIP] pthread_create player " << i
+                      << " failed: " << strerror(rc) << "\n";
+        else
+            std::cout << "[HIP] Player thread " << i << " spawned\n";
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  renderThread
+// ─────────────────────────────────────────────────────────────────────────────
+static void* renderThread(void* arg)
+{
+    HIPContext* ctx = (HIPContext*)arg;
+    ctx->renderer->run();                          // blocks until window closes
+
+    set_running(ctx, 0);
+
+    // wake any player thread stuck waiting on its slot
+    for (int i = 0; i < ctx->numPlayers; i++)
+        pthread_cond_broadcast(&ctx->slots[i].cond);
+
+    // wake any player thread stuck waiting on its turn
+    pthread_mutex_lock(&ctx->shm->global_mutex);
+    pthread_cond_broadcast(&ctx->shm->turn_condition);
+    pthread_mutex_unlock(&ctx->shm->global_mutex);
+
+    return nullptr;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  joinAndCleanup
+// ─────────────────────────────────────────────────────────────────────────────
 static void joinAndCleanup(HIPContext* ctx)
 {
     for (int i = 0; i < ctx->numPlayers; i++)
@@ -233,6 +273,22 @@ static void joinAndCleanup(HIPContext* ctx)
         pthread_join(ctx->playerTids[i], nullptr);
         pthread_mutex_destroy(&ctx->slots[i].mutex);
         pthread_cond_destroy (&ctx->slots[i].cond);
+    }
+    std::cout << "[HIP] All player threads joined\n";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  typeName — readable PlayerType for terminal verification
+// ─────────────────────────────────────────────────────────────────────────────
+static const char* typeName(PlayerType t)
+{
+    switch (t)
+    {
+        case PlayerType::CHRONO: return "CHRONO";
+        case PlayerType::FROG:   return "FROG";
+        case PlayerType::MARLE:  return "MARLE";
+        case PlayerType::MAGUS:  return "MAGUS";
+        default:                 return "NONE";
     }
 }
 
@@ -245,59 +301,84 @@ int main(int argc, char* argv[])
 
     const char* shmName = argv[1];
 
+    // ── PHASE 1: Attach shared memory ────────────────────────────────────────
     int fd = shm_open(shmName, O_RDWR, 0666);
     if (fd < 0) { perror("[HIP] shm_open"); return 1; }
+
     SharedMemoryBlock* shm = (SharedMemoryBlock*)mmap(
         nullptr, sizeof(SharedMemoryBlock),
         PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
     if (shm == MAP_FAILED) { perror("[HIP] mmap"); return 1; }
+
     std::cout << "[HIP] Attached to shared memory\n";
 
+    // ── PHASE 2: Run menu — blocks until user confirms party ─────────────────
+    sf::RenderWindow menuWindow(
+        sf::VideoMode((unsigned)MENU_WIN_W, (unsigned)MENU_WIN_H),
+        "Chrono Rift");
+
+    GameMenu menu(menuWindow,
+                  "../MapsNScreen/MenuScreen.jpg",
+                  "../MapsNScreen/Map_Overlay.png");
+
+    PartyConfig party = menu.run();   // blocks until DONE or window closed
+
+    if (!party.valid())
+    {
+        std::cout << "[HIP] No party selected — exiting\n";
+        munmap(shm, sizeof(SharedMemoryBlock));
+        return 0;
+    }
+
+    // menuWindow destructs here — SFML closes it before renderer opens
+
+    // ── Terminal verification ─────────────────────────────────────────────────
+    std::cout << "[HIP] Party confirmed: " << party.numPlayers() << " players\n";
+    for (int i = 0; i < party.numPlayers(); i++)
+        std::cout << "  Player " << i << " = " << typeName(party.players[i]) << "\n";
+    std::cout << "  Level selected = " << party.selectedLevel << "\n";
+
+    // ── PHASE 3: Build HIPContext from party ──────────────────────────────────
     HIPContext ctx;
     ctx.shm        = shm;
-    ctx.numPlayers = 2;
+    ctx.renderer   = nullptr;
+    ctx.numPlayers = party.numPlayers();
     ctx.running    = 1;
     pthread_mutex_init(&ctx.running_mutex, nullptr);
-    ctx.playerTypes[0] = PlayerType::CHRONO;
-    ctx.playerTypes[1] = PlayerType::FROG;
 
+    for (int i = 0; i < ctx.numPlayers; i++)
+        ctx.playerTypes[i] = party.players[i];
+
+    // ── PHASE 4: Handshake with Arbiter ──────────────────────────────────────
     pthread_t setupTid;
     pthread_create(&setupTid, nullptr, setupThread, &ctx);
     pthread_join(setupTid, nullptr);
-    std::cout << "[HIP] Setup complete — spawning player threads\n";
+    std::cout << "[HIP] Setup complete — Arbiter acknowledged\n";
+
+    // ── PHASE 5: Open game window + spawn player threads ─────────────────────
+    Map map(0.0f, 0.0f, 800, 800);
+    map.loadScreens({ "../MapsNScreen/Fiaona'aForest_Lvl_tile1.png" });
+
+    Renderer renderer(shm, &map);
+    ctx.renderer = &renderer;
+
+    renderer.setActionCallback([&ctx](Action act, int tgt, int wpn)
+    {
+        submitAction(&ctx, act, tgt, wpn);
+    });
 
     spawnPlayerThreads(&ctx);
 
-    std::cout << "[HIP] Terminal mode. Commands: s=strike, h=heal, k=skip, g=get_artifact, r=release, q=quit\n";
-    std::cout << "      Format: <command> <target_enemy_index_OR_artifact_id>\n";
-    std::cout << "      Example: s 0   (strike enemy 0) OR g 1 (get artifact 1)\n";
+    pthread_t renderTid;
+    pthread_create(&renderTid, nullptr, renderThread, &ctx);
+    pthread_join(renderTid, nullptr);   // blocks until window closes
 
-    while (get_running(&ctx))
-    {
-        char cmd;
-        int  target = 0;
-        std::cout << "> ";
-        std::cin >> cmd >> target;
-
-        Action action;
-        int target_id = -1;
-        int weapon_id = -1;
-
-        switch(cmd) {
-            case 's': action = Action::STRIKE;  target_id = target; break;
-            case 'h': action = Action::HEAL;    target_id = target; break;
-            case 'k': action = Action::SKIP;    target_id = target; break;
-            case 'g': action = Action::GET_ARTIFACT; weapon_id = target; break;
-            case 'r': action = Action::RELEASE_ARTIFACT; weapon_id = target; break;
-            case 'q': set_running(&ctx, 0); continue;
-            default: std::cout << "Unknown command\n"; continue;
-        }
-        submitAction(&ctx, action, target_id, weapon_id);
-    }
-
+    // ── PHASE 6: Cleanup ──────────────────────────────────────────────────────
     joinAndCleanup(&ctx);
     pthread_mutex_destroy(&ctx.running_mutex);
     munmap(shm, sizeof(SharedMemoryBlock));
+
+    std::cout << "[HIP] Clean exit\n";
     return 0;
 }
