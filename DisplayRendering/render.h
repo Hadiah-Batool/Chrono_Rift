@@ -12,6 +12,7 @@
 #include "../Characters/Enemy.h"
 #include "Map.h"
 #include "../shared/shared_types.h"
+#include "EnemyRenderer.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ACTION CONSTANTS
@@ -168,20 +169,25 @@ public:
             "Chrono Rift",
             sf::Style::Titlebar | sf::Style::Close
         );
+                // spin until arbiter has populated enemies (non-blocking poll)
+        while (m_shm->num_active_enemies == 0)
+            sf::sleep(sf::milliseconds(10));
         m_window.setFramerateLimit(60);
         loadAssets();
         std::cout << "[Renderer] Window open — entering game loop\n";
-
+        loadEnemyRenderers();
         while (m_window.isOpen())
         {
             pthread_mutex_lock(&m_stopMutex);
             bool stop = m_stop;
             pthread_mutex_unlock(&m_stopMutex);
             if (stop) { m_window.close(); break; }
-
+            float dt = m_clock.restart().asSeconds();  
             handleEvents();
             m_window.clear(Colour::SidebarBg);
-            drawAll();
+            drawAll(dt);
+            
+           
             m_window.display();
         }
 
@@ -219,6 +225,7 @@ private:
     sf::RenderWindow m_window;
     sf::Font         m_font;
     bool             m_fontLoaded = false;
+    sf::Clock        m_clock;
 
     std::unordered_map<std::string, sf::Texture> m_weaponTextures;
 
@@ -232,8 +239,14 @@ private:
     // Log overlay toggle
     bool m_logExpanded = false;
 
+
     // Callback wired by hip.cpp
     std::function<void(Action, int, int)> m_actionCallback;
+
+    // In Renderer class — private members
+    EnemyRenderer m_enemyRenderers[9];   // matches MAX_ENEMIES in GameState
+    bool          m_enemiesLoaded = false;
+
 
     // ─────────────────────────────────────────────────────────────────────────
     //  Mode helpers
@@ -274,6 +287,44 @@ private:
             && m_localEnemies[idx]
             && m_localEnemies[idx]->isAlive();
     }
+    // Call once when enemies are first populated (after SETUP_GAME handshake)
+void loadEnemyRenderers()
+{
+    if (!m_shm) return;
+
+    int count = m_shm->num_active_enemies;
+    if (count <= 0) return;
+
+    for (int i = 0; i < count; i++)
+    {
+        m_enemyRenderers[i] = EnemyRenderer{};          // reset first
+        m_enemyRenderers[i].init(m_shm->enemies[i]);
+    }
+
+    m_enemiesLoaded = true;
+    std::cout << "[RENDERER] Loaded " << count << " enemy renderers\n";
+}
+
+
+// Call every frame inside drawAll(), before drawEnemySection()
+void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
+{
+    if (!m_enemiesLoaded || !isShmMode()) return;
+
+    // iterate over ALL slots, not just num_active_enemies
+    // because dead enemies still sit in their index
+    int total = m_shm->num_active_enemies;
+
+    for (int i = 0; i < total; i++)
+    {
+        const Enemy& e = m_shm->enemies[i];
+        if (!e.isAlive()) continue;
+
+        m_enemyRenderers[i].update(dt, e);
+        m_enemyRenderers[i].draw(window, e);
+    }
+}
+
 
     bool isPlayerAlive(int idx) const
     {
@@ -612,11 +663,12 @@ if (clicked)
     //  drawAll — master draw call, called every frame
     // ─────────────────────────────────────────────────────────────────────────
 
-    void drawAll()
+    void drawAll(float dt)
     {
         // Map background
         if (m_map) m_map->draw(m_window);
         else       std::cerr << "[Renderer] Map pointer is null\n";
+            updateAndDrawEnemies(m_window, dt);   // ← MOVE THIS UP, not after HU
 
         // Local mode only — draw character sprites via their own draw()
         if (!isShmMode())

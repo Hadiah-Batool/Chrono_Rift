@@ -1,5 +1,4 @@
 #pragma once
-#include <SFML/Graphics.hpp>
 #include <cstdlib>
 #include <string>
 
@@ -28,23 +27,24 @@ protected:
     int   MaxStamina;
 
     // ── Status ───────────────────────────────────────────────
-    bool  alive;
-    bool  myTurn;
-    bool  stunned;
-    time_t   stunEndTem;
+    bool   alive;
+    bool   myTurn;
+    bool   stunned;
+    time_t stunEndTem;
 
-    // ── Movement ─────────────────────────────────────────────
-    float        speed;
-    sf::Vector2f pos;
+    // ── Movement / position ──────────────────────────────────
+    float speed;
+    float posX;
+    float posY;
 
-    // ── Sprite ───────────────────────────────────────────────
-    sf::Sprite  sprite;
-    sf::Texture texture;
+    // ── Scale (read by EnemyRenderer each frame) ─────────────
+    float scaleX;
+    float scaleY;
 
-    // ── Roll number fields (shared by Player and Enemy) ──────
-    int rollFull;       // full roll number  → seed + HP base for player
-    int rollLastDig;    // last digit        → damage base  (both)
-    int rollLastTwo;    // last two digits   → HP base for enemy
+    // ── Roll number fields ───────────────────────────────────
+    int rollFull;
+    int rollLastDig;
+    int rollLastTwo;
 
 public:
     Character(CharacterType type)
@@ -54,15 +54,14 @@ public:
           alive(false), myTurn(false),
           stunned(false), stunEndTem(0),
           speed(0.f),
+          posX(0.f), posY(0.f),
+          scaleX(1.f), scaleY(1.f),
           rollFull(0), rollLastDig(0), rollLastTwo(0)
     {}
 
     virtual ~Character() {}
 
     // ── Roll number setup ─────────────────────────────────────
-    // Call this once before InitAllProperties.
-    // Player:  pass full roll, last digit, last two digits
-    // Enemy:   same — it only uses lastTwo + lastDig
     void setRollNumber(int full, int lastDig, int lastTwo)
     {
         rollFull    = full;
@@ -70,19 +69,13 @@ public:
         rollLastTwo = lastTwo;
     }
 
-    // Override in Player and Enemy to set HP/damage/speed
-    // using the stored roll fields
     virtual void initRollStats(float speedOverride = -1.f) = 0;
 
     // ── Damage / health ───────────────────────────────────────
     void TakeDamage(int amount)
     {
         Hp -= amount;
-        if (Hp <= 0)
-        {
-            Hp    = 0;
-            alive = false;
-        }
+        if (Hp <= 0) { Hp = 0; alive = false; }
     }
 
     void RegainHealth(int amount)
@@ -106,66 +99,31 @@ public:
 
     void depleteStamina(bool fullDeplete)
     {
-        // true  → action/strike → 0
-        // false → skip          → 50%
         stamina = fullDeplete ? 0 : MaxStamina / 2;
     }
 
     void ResetStamina() { stamina = 0; }
+    bool CanAct()       const { return isReadyToAct(); }
 
-    bool CanAct() const { return isReadyToAct(); }
-
-    // ── Stun ─────────────────────────────────────────────────
+    // ── Stun ──────────────────────────────────────────────────
     void applyStun(time_t stun)
     {
         stunned    = true;
-        stunEndTem = 3;             // 3 seconds per spec
-        if (stamina >= MaxStamina)
-            stamina = 0;            // lose turn if stamina was full
+        stunEndTem = 3;
+        if (stamina >= MaxStamina) stamina = 0;
     }
 
     void clearStun()
     {
         stunned    = false;
         stunEndTem = 0;
-        // stamina preserved — spec says resume from exact point
     }
 
     bool amStunned() const { return stunned; }
     bool amAlive()   const { return alive; }
     float getStaminaRecoveryRate() const { return speed; }
 
-    // ── Sprite helpers ────────────────────────────────────────
-    bool loadTexture(const std::string& path)
-    {
-        if (texture.loadFromFile(path))
-        {
-            sprite.setTexture(texture);
-            return true;
-        }
-        return false;
-    }
-
-    void SetScaleSprite(float scaleX, float scaleY)
-    {
-        sprite.setScale(scaleX, scaleY);
-    }
-
-    void SetOriginSprite(float originX, float originY)
-    {
-        sprite.setOrigin(originX, originY);
-    }
-
-    void draw(sf::RenderWindow& window)
-    {
-        if (alive)
-        {
-            sprite.setPosition(pos);
-            window.draw(sprite);
-        }
-    }
-
-    // ── Pure virtual action hook ──────────────────────────────
+    // ── Pure virtual ──────────────────────────────────────────
     virtual void DoAction() = 0;
 
     // ── Getters / Setters ─────────────────────────────────────
@@ -185,23 +143,29 @@ public:
     void  setMyTurn(bool v)      { myTurn = v; }
     bool  isStunned()      const { return stunned; }
     void  setStunned(bool v, int turn_num)
-         {
-            stunned = v;
-              stunEndTem = turn_num + 3; /* 3 turns per spec */
-        }
+    {
+        stunned    = v;
+        stunEndTem = turn_num + 3;
+    }
 
     int   getStunEndTem()  const { return stunEndTem; }
     void  setStunEndTem(int v)   { stunEndTem = v; }
     float getSpeed()       const { return speed; }
     void  setSpeed(float v)      { speed = v; }
-    float getXPos()        const { return pos.x; }
-    void  setXPos(float v)       { pos.x = v; }
-    float getYPos()        const { return pos.y; }
-    void  setYPos(float v)       { pos.y = v; }
-    int   getRollFull()    const { return rollFull; }
-    int   getRollLastDig() const { return rollLastDig; }
-    int   getRollLastTwo() const { return rollLastTwo; }
 
-    float getScaleX()       const { return sprite.getScale().x; }
-    float getScaleY()       const { return sprite.getScale().y; }
+    // ── Position ──────────────────────────────────────────────
+    float getXPos()        const { return posX; }
+    void  setXPos(float v)       { posX = v; }
+    float getYPos()        const { return posY; }
+    void  setYPos(float v)       { posY = v; }
+
+    // ── Scale (set by InitAllProperties, read by EnemyRenderer) ──
+    float getScaleX()      const { return scaleX; }
+    float getScaleY()      const { return scaleY; }
+    void  setScale(float x, float y) { scaleX = x; scaleY = y; }
+
+    // ── Roll ──────────────────────────────────────────────────
+    int getRollFull()      const { return rollFull; }
+    int getRollLastDig()   const { return rollLastDig; }
+    int getRollLastTwo()   const { return rollLastTwo; }
 };

@@ -112,13 +112,16 @@ public:
                 std::cout << "[ARBITER] Parsing " << filename << ". Spawning " << num_enemies << " enemies.\n";
                 for (int i = 0; i < num_enemies; ++i) {
                     int x, y, type;
-                    if (infile >> x >> y >> type) {
+                    if (infile >> x >> y >> type) 
+                    {
                         new (&shared_block->state.enemies[i]) Enemy(i, static_cast<EnemyType>(type));
                         shared_block->state.enemies[i].setRollNumber(seed_roll_full, seed_last_dig, seed_last_two);
                         shared_block->state.enemies[i].initRollStats();
                         shared_block->state.enemies[i].setAlive(true);
                         shared_block->state.enemies[i].clearStun();
                         shared_block->state.enemies[i].ResetStamina();
+
+                        shared_block->state.enemies[i].InitAllProperties(static_cast<float>(x), static_cast<float>(y));
                         std::cout << "  -> Spawned Enemy " << i << " (Type: " << type << ")\n";
                     }
                 }

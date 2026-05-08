@@ -232,6 +232,7 @@ public:
     // ── Sprite + position init ────────────────────────────────
     bool InitAllProperties(float spawnX, float spawnY)
     {
+        cout<<"Setting position: ("<<spawnX<<", "<<spawnY<<") for enemy "<<enemyId<<" of type "<<static_cast<int>(enemyType)<<endl;
         switch (enemyType)
         {
             case EnemyType::ALIEN_ENEMY:

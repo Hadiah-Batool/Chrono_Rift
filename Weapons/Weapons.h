@@ -52,6 +52,7 @@ public:
     int         getDamage()    const { return damage; }
     bool        isUsable()     const { return canBeUsed; }
     void        setUsable(bool v)    { canBeUsed = v; }
+    
 };
 
 
