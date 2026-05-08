@@ -258,20 +258,99 @@ static void onSigterm(int) { if (g_arbiterPid > 0) kill(g_arbiterPid, SIGTERM); 
 //  main
 //
 // ─────────────────────────────────────────────────────────────────────────────
+// int main(int argc, char* argv[])
+// {
+//     // argv[1] = shm_name only — arbiter owns the kill, not us
+//     if (argc < 2)
+//     {
+//         std::cerr << "[HIP] Usage: hip <shm_name>\n";
+//         return 1;
+//     }
+
+//     const char* shmName = argv[1];
+
+
+
+//     // ── PHASE 1: Attach to shared memory first ────────────────────────────
+//     int fd = shm_open(shmName, O_RDWR, 0666);
+//     if (fd < 0) { perror("[HIP] shm_open"); return 1; }
+//     SharedMemoryBlock* shm = (SharedMemoryBlock*)mmap(
+//         nullptr, sizeof(SharedMemoryBlock),
+//         PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+//     close(fd);
+//     if (shm == MAP_FAILED) { perror("[HIP] mmap"); return 1; }
+
+//     std::cout << "[HIP] Attached to shared memory\n";
+
+//     // ── PHASE 2: Run the menu — blocks until user confirms party ──────────
+//     sf::RenderWindow menuWindow(
+//         sf::VideoMode((unsigned)MENU_WIN_W, (unsigned)MENU_WIN_H),
+//         "Chrono Rift");
+
+//     GameMenu menu(menuWindow,
+//                   "../MapsNScreen/main_bg.png",
+//                   "../MapsNScreen/level_map.png");
+
+//     PartyConfig party = menu.run();  // blocks until DONE
+
+// if (!party.valid())
+// {
+//     munmap(shm, sizeof(SharedMemoryBlock));
+//     return 0;
+// }
+
+//     // menuWindow destructs here — window closes before renderer opens
+//     std::cout << "[HIP] Party confirmed: " << party.numPlayers() << " players\n";
+
+//     // ── PHASE 3: Build context with party data ────────────────────────────
+//     HIPContext ctx;
+//     ctx.shm        = shm;
+//     ctx.numPlayers = party.numPlayers();
+//     ctx.running.store(true);
+
+//     // Copy chosen types into ctx
+//     for (int i = 0; i < ctx.numPlayers; i++)
+//         ctx.playerTypes[i] = party.players[i];
+
+//     // ── PHASE 4: Setup renderer and map ──────────────────────────────────
+//     Map map(0.0f, 0.0f, 800, 800);
+//     map.loadScreens({ "../MapsNScreen/FioanaForest_Lvl_tile1.png" });
+//     Renderer renderer(shm, &map);
+//     ctx.renderer = &renderer;
+
+//     renderer.setActionCallback([&ctx](Action act, int tgt, int wpn)
+//     {
+//         submitAction(&ctx, act, tgt, wpn);
+//     });
+
+//     // ── PHASE 5: Send setup to arbiter, then spawn game threads ──────────
+//     // setupThread waits for arbiter to signal -2, then sends party mailbox
+//     pthread_t setupTid;
+//     pthread_create(&setupTid, nullptr, setupThread, &ctx);
+//     pthread_join(setupTid, nullptr);  // block until arbiter ACKs
+
+//     std::cout << "[HIP] Setup complete — spawning player threads\n";
+
+//     spawnPlayerThreads(&ctx);
+
+//     pthread_t renderTid;
+//     pthread_create(&renderTid, nullptr, renderThread, &ctx);
+//     pthread_join(renderTid, nullptr);  // blocks until window closes
+
+//     ctx.running.store(false);
+//     joinAndCleanup(&ctx);
+
+//     munmap(shm, sizeof(SharedMemoryBlock));
+//     return 0;
+// }
+
 int main(int argc, char* argv[])
 {
-    // argv[1] = shm_name only — arbiter owns the kill, not us
-    if (argc < 2)
-    {
-        std::cerr << "[HIP] Usage: hip <shm_name>\n";
-        return 1;
-    }
+    if (argc < 2) { std::cerr << "[HIP] Usage: hip <shm_name>\n"; return 1; }
 
     const char* shmName = argv[1];
 
-
-
-    // ── PHASE 1: Attach to shared memory first ────────────────────────────
+    // Attach shared memory
     int fd = shm_open(shmName, O_RDWR, 0666);
     if (fd < 0) { perror("[HIP] shm_open"); return 1; }
     SharedMemoryBlock* shm = (SharedMemoryBlock*)mmap(
@@ -279,67 +358,51 @@ int main(int argc, char* argv[])
         PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
     if (shm == MAP_FAILED) { perror("[HIP] mmap"); return 1; }
-
     std::cout << "[HIP] Attached to shared memory\n";
 
-    // ── PHASE 2: Run the menu — blocks until user confirms party ──────────
-    sf::RenderWindow menuWindow(
-        sf::VideoMode((unsigned)MENU_WIN_W, (unsigned)MENU_WIN_H),
-        "Chrono Rift");
-
-    GameMenu menu(menuWindow,
-                  "../MapsNScreen/main_bg.png",
-                  "../MapsNScreen/level_map.png");
-
-    PartyConfig party = menu.run();  // blocks until DONE
-
-if (!party.valid())
-{
-    munmap(shm, sizeof(SharedMemoryBlock));
-    return 0;
-}
-
-    // menuWindow destructs here — window closes before renderer opens
-    std::cout << "[HIP] Party confirmed: " << party.numPlayers() << " players\n";
-
-    // ── PHASE 3: Build context with party data ────────────────────────────
+    // ── HARDCODED PARTY (skip menu) ───────────────────────────────────────────
     HIPContext ctx;
     ctx.shm        = shm;
-    ctx.numPlayers = party.numPlayers();
+    ctx.numPlayers = 2;   // change to 1, 2, 3, or 4 as needed
     ctx.running.store(true);
+    ctx.playerTypes[0] = PlayerType::CHRONO;   // adjust types as needed
+    ctx.playerTypes[1] = PlayerType::FROG;
 
-    // Copy chosen types into ctx
-    for (int i = 0; i < ctx.numPlayers; i++)
-        ctx.playerTypes[i] = party.players[i];
-
-    // ── PHASE 4: Setup renderer and map ──────────────────────────────────
-    Map map(0.0f, 0.0f, 800, 800);
-    map.loadScreens({ "../MapsNScreen/FioanaForest_Lvl_tile1.png" });
-    Renderer renderer(shm, &map);
-    ctx.renderer = &renderer;
-
-    renderer.setActionCallback([&ctx](Action act, int tgt, int wpn)
-    {
-        submitAction(&ctx, act, tgt, wpn);
-    });
-
-    // ── PHASE 5: Send setup to arbiter, then spawn game threads ──────────
-    // setupThread waits for arbiter to signal -2, then sends party mailbox
+    // ── SEND SETUP TO ARBITER ─────────────────────────────────────────────────
     pthread_t setupTid;
     pthread_create(&setupTid, nullptr, setupThread, &ctx);
-    pthread_join(setupTid, nullptr);  // block until arbiter ACKs
-
+    pthread_join(setupTid, nullptr);
     std::cout << "[HIP] Setup complete — spawning player threads\n";
 
+    // ── SPAWN PLAYER THREADS ──────────────────────────────────────────────────
     spawnPlayerThreads(&ctx);
 
-    pthread_t renderTid;
-    pthread_create(&renderTid, nullptr, renderThread, &ctx);
-    pthread_join(renderTid, nullptr);  // blocks until window closes
+    // ── TERMINAL INPUT LOOP (replaces renderer) ───────────────────────────────
+    std::cout << "[HIP] Terminal mode. Commands: s=strike, h=heal, k=skip, q=quit\n";
+    std::cout << "      Format: <command> <target_enemy_index>\n";
+    std::cout << "      Example: s 0   (strike enemy 0)\n";
 
-    ctx.running.store(false);
+    while (ctx.running.load())
+    {
+        char cmd;
+        int  target = 0;
+        std::cout << "> ";
+        std::cin >> cmd >> target;
+
+        Action action;
+        switch(cmd) {
+            case 's': action = Action::STRIKE;  break;
+            case 'h': action = Action::HEAL;    break;
+            case 'k': action = Action::SKIP;    break;
+            case 'q': ctx.running.store(false); continue;
+            default:
+                std::cout << "Unknown command\n";
+                continue;
+        }
+        submitAction(&ctx, action, target);
+    }
+
     joinAndCleanup(&ctx);
-
     munmap(shm, sizeof(SharedMemoryBlock));
     return 0;
 }

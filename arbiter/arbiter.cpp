@@ -454,9 +454,15 @@ int main(int argc, char* argv[]) {
     Arbiter arbiter(shared_block);
 
     pid_t hip_pid = fork();
-    if (hip_pid == 0) { execl("./hip.out", "./hip.out", shm_name, nullptr); return 1; }
+    if (hip_pid == 0) { execl("./hip.out", "./hip.out", shm_name, nullptr);
+        cout<<"Could not launch HIP process. Make sure hip.out is compiled and in the same directory."<<endl; 
+        return 1;
+     }
     pid_t asp_pid = fork();
-    if (asp_pid == 0) { execl("./asp.out", "./asp.out", shm_name, nullptr); return 1; }
+    if (asp_pid == 0) { execl("./asp.out", "./asp.out", shm_name, nullptr); 
+        cout<<"Could not launch ASP process. Make sure asp.out is compiled and in the same directory."<<endl; 
+        return 1; 
+    }
 
     pthread_mutex_lock(&shared_block->global_mutex);
     shared_block->state.current_turn_owner_id = -2;
