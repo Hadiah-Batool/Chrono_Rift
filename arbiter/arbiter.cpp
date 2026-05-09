@@ -27,6 +27,20 @@ using std::array;
 #define time_of_response 3
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  ULTIMATE ABILITY SIGNAL HANDLER (Section 8)
+// ─────────────────────────────────────────────────────────────────────────────
+static pid_t g_asp_pid = -1;
+
+static void handle_sigalrm(int sig) {
+    if (g_asp_pid > 0) {
+        std::cout << "\n[ARBITER] *** 10 SECONDS PASSED! ULTIMATE ABILITY ENDED! ***\n";
+        std::cout << "[ARBITER] *** Sending SIGCONT to ASP. Time resumes for enemies! ***\n> ";
+        std::cout.flush();
+        kill(g_asp_pid, SIGCONT);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  ARTIFACT HELPER SECTION (Requires resource_table_mutex lock)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -93,6 +107,48 @@ static void release_artifact_from_enemy(SharedMemoryBlock* sb, int enemy_idx) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  WEAPON DROP & DEATH HANDLER (Sections 6 & 7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+static Weapon generateRandomWeapon(int& out_id) {
+    static int weapon_counter = 100; // High ID to avoid clashing with standard inventory
+    int type_rand = rand() % 6;
+    out_id = weapon_counter++;
+
+    switch(type_rand) {
+        case 0: return Weapon(out_id, WeaponType::IRON_HALBERD, "Iron Halberd", 7, 55);
+        case 1: return Weapon(out_id, WeaponType::VENOM_DAGGER, "Venom Dagger", 4, 30);
+        case 2: return Weapon(out_id, WeaponType::THUNDERSTAFF, "Thunderstaff", 6, 50);
+        case 3: return Weapon(out_id, WeaponType::OBSIDIAN_AXE, "Obsidian Axe", 5, 45);
+        case 4: return Weapon(out_id, WeaponType::FROSTBOW, "Frostbow", 6, 48);
+        default: return Weapon(out_id, WeaponType::SPLINTER_STICK, "Splinter Stick", 2, 12);
+    }
+}
+
+static void handle_enemy_death(SharedMemoryBlock* shared_block, int target_id) {
+    release_artifact_from_enemy(shared_block, target_id);
+    shared_block->state.enemies_defeated++;
+    std::cout << "[ARBITER] Enemy " << target_id << " defeated! Total: " << shared_block->state.enemies_defeated << "/10\n";
+
+    int drop_roll = rand() % 100;
+
+    // 15% Chance to introduce the Eclipse Relic
+    if (drop_roll < 15 && !shared_block->state.artifacts[2].isAvailable() && !shared_block->state.artifacts[2].isHeld()) {
+        std::cout << "\n[ARBITER] *** A blinding light bursts from the fallen enemy! ***\n";
+        std::cout << "[ARBITER] *** The ECLIPSE RELIC has been introduced! (Use 'g 2' to lock it) ***\n\n";
+        shared_block->state.artifacts[2].introduce();
+    }
+    // 35% Chance to drop a standard weapon (only if the ground is clear)
+    else if (drop_roll >= 15 && drop_roll < 50 && !shared_block->state.is_weapon_dropped) {
+        int w_id;
+        shared_block->state.dropped_weapon = generateRandomWeapon(w_id);
+        shared_block->state.is_weapon_dropped = true;
+        std::cout << "\n[ARBITER] Enemy dropped: " << shared_block->state.dropped_weapon.getName() << "!\n";
+        std::cout << "[ARBITER] (Use PICKUP to claim it, or an enemy will steal it!)\n\n";
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  ARBITER KERNEL CLASS
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -144,7 +200,6 @@ public:
                 int limit = std::min(num_players_in_file, shared_block->state.num_active_players);
                 for (int i = 0; i < limit; ++i) {
                     int x, y, type;
-                    // We read 'type' from the file but ignore it, because the HIP Menu already set the correct PlayerType!
                     if (infile >> x >> y >> type) {
                         shared_block->state.players[i].InitAllProperties(static_cast<float>(x), static_cast<float>(y));
                         std::cout << "  -> Positioned Player " << i << " at (" << x << ", " << y << ")\n";
@@ -235,7 +290,37 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
     int attacker_id = shared_block->hip_mailbox.requesting_entity_id;
     int target_id   = shared_block->hip_mailbox.target_id;
 
+    // --- RULE: If a player takes an action that is NOT Pickup, the enemy steals it! ---
+    if (shared_block->state.is_weapon_dropped && request.action_type != Action::PICKUP) {
+        std::cout << "[ARBITER] Player " << attacker_id << " ignored the dropped weapon!\n";
+        for(int e = 0; e < shared_block->state.num_active_enemies; e++) {
+            if (shared_block->state.enemies[e].isAlive()) {
+                shared_block->state.enemies[e].setDemage(shared_block->state.enemies[e].getDemage() + shared_block->state.dropped_weapon.getDamage());
+                std::cout << "[ARBITER] Enemy " << e << " snatched the " << shared_block->state.dropped_weapon.getName() << " and gained its damage!\n";
+                break;
+            }
+        }
+        shared_block->state.is_weapon_dropped = false;
+    }
+
     switch (request.action_type) {
+
+    case Action::PICKUP: {
+        if (shared_block->state.is_weapon_dropped) {
+            bool success = shared_block->state.players[attacker_id].pickupWeapon(shared_block->state.dropped_weapon);
+            if (success) {
+                std::cout << "[ARBITER] Player " << attacker_id << " looted the " << shared_block->state.dropped_weapon.getName() << "!\n";
+                shared_block->state.is_weapon_dropped = false;
+            } else {
+                std::cout << "[ARBITER] Player " << attacker_id << " tried to pick it up, but inventory swapping failed!\n";
+            }
+        } else {
+            std::cout << "[ARBITER] There is no weapon on the ground to pick up.\n";
+        }
+        shared_block->state.players[attacker_id].ResetStamina();
+        break;
+    }
+
     case Action::STRIKE: {
         // Prevent hitting dead enemies
         if (!shared_block->state.enemies[target_id].isAlive()) {
@@ -250,15 +335,15 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         std::cout << "[ARBITER] Player " << attacker_id << " struck Enemy " << target_id
           << " for " << damage << " DMG! (Enemy HP: " << shared_block->state.enemies[target_id].getHp() << ")" << endl;
 
+        // CORRECT PLACEMENT: After damage is taken, replace all old death logic.
         if (!shared_block->state.enemies[target_id].isAlive()) {
-            release_artifact_from_enemy(shared_block, target_id);
-            shared_block->state.enemies_defeated++;
-            // CRITICAL FIX: Removed num_active_enemies-- so the array indexing doesn't break!
-            std::cout << "[ARBITER] Enemy " << target_id << " defeated! Total: " << shared_block->state.enemies_defeated << "/10\n";
+            handle_enemy_death(shared_block, target_id);
         }
+
         shared_block->state.players[attacker_id].ResetStamina();
         break;
     }
+
     case Action::EXHAUST: {
         int damage        = shared_block->state.players[attacker_id].getDemage();
         int cur_stamina   = shared_block->state.enemies[target_id].getStamina();
@@ -266,6 +351,7 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         shared_block->state.players[attacker_id].ResetStamina();
         break;
     }
+
     case Action::USE_WEAPON: {
         // Prevent hitting dead enemies
         if (!shared_block->state.enemies[target_id].isAlive()) {
@@ -274,20 +360,23 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
             break;
         }
 
-        int weapon_id     = shared_block->hip_mailbox.weapon_id;
-        Weapon w;
+        // CORRECT LOGIC: Actually fetch the damage from the inventory!
+        int weapon_id = shared_block->hip_mailbox.weapon_id;
         int weapon_damage = 0;
-        if (shared_block->state.players[attacker_id].getInventory().getWeaponById(weapon_id, w)) {
-            weapon_damage = w.getDamage();
+
+        if (shared_block->state.players[attacker_id].getInventory().hasWeapon(weapon_id)) {
+            weapon_damage = shared_block->state.players[attacker_id].getInventory().getEquippedWeapons().at(weapon_id).getDamage();
         }
 
         shared_block->state.enemies[target_id].TakeDamage(weapon_damage);
+        std::cout << "[ARBITER] Player " << attacker_id << " used weapon " << weapon_id
+                  << " on Enemy " << target_id << " for " << weapon_damage << " DMG!\n";
+
+        // CORRECT PLACEMENT: After damage is taken, replacing the duplicate block entirely.
         if (!shared_block->state.enemies[target_id].isAlive()) {
-            release_artifact_from_enemy(shared_block, target_id);
-            shared_block->state.enemies_defeated++;
-            // CRITICAL FIX: Removed num_active_enemies--
-            std::cout << "[ARBITER] Enemy " << target_id << " eliminated by weapon!\n";
+            handle_enemy_death(shared_block, target_id);
         }
+
         shared_block->state.players[attacker_id].ResetStamina();
         break;
     }
@@ -338,6 +427,26 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         shared_block->state.players[attacker_id].ResetStamina();
         break;
     }
+    case Action::ULTIMATE: {
+        // Artifact IDs: Solar Core = 0, Lunar Blade = 1
+        bool has_solar = shared_block->state.players[attacker_id].getInventory().hasWeapon(0);
+        bool has_lunar = shared_block->state.players[attacker_id].getInventory().hasWeapon(1);
+
+        if (has_solar && has_lunar) {
+            std::cout << "\n[ARBITER] *** Player " << attacker_id << " triggered the ULTIMATE ABILITY! ***\n";
+            std::cout << "[ARBITER] *** Sending SIGSTOP to ASP. Enemies frozen for 10 seconds! ***\n\n";
+
+            // 1. Freeze the ASP immediately at the OS level
+            kill(g_asp_pid, SIGSTOP);
+
+            // 2. Set an OS alarm to fire exactly 10 seconds from now
+            alarm(10);
+        } else {
+            std::cout << "[ARBITER] Player " << attacker_id << " attempted Ultimate but lacks the required artifacts (Needs both Solar Core and Lunar Blade)!\n";
+        }
+        shared_block->state.players[attacker_id].ResetStamina();
+        break;
+    }
     default:
         break;
     }
@@ -346,6 +455,13 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
 void handle_enemy_action(const ActionRequest& request, SharedMemoryBlock* shared_block) {
     int attacker_id = shared_block->asp_mailbox.requesting_entity_id;
     int target_id   = shared_block->asp_mailbox.target_id;
+
+    // --- RULE: If it's an enemy's turn and a weapon is dropped, they snatch it instantly! ---
+    if (shared_block->state.is_weapon_dropped) {
+        shared_block->state.enemies[attacker_id].setDemage(shared_block->state.enemies[attacker_id].getDemage() + shared_block->state.dropped_weapon.getDamage());
+        std::cout << "[ARBITER] Enemy " << attacker_id << " snatched the dropped weapon on its turn!\n";
+        shared_block->state.is_weapon_dropped = false;
+    }
 
     switch (request.action_type) {
     case Action::STRIKE: {
@@ -493,6 +609,12 @@ int main(int argc, char* argv[]) {
     srand(seed);
     pthread_t stamina_accumalator, deadlock_detector;
 
+    // --- REGISTER THE SIGALRM HANDLER ---
+    struct sigaction sa_alrm{};
+    sigemptyset(&sa_alrm.sa_mask);
+    sa_alrm.sa_handler = handle_sigalrm;
+    sigaction(SIGALRM, &sa_alrm, nullptr);
+
     const char* shm_name = "/game_state_shm";
     shm_unlink(shm_name);
     SharedMem master_shm(shm_name, sizeof(SharedMemoryBlock), true, true);
@@ -509,8 +631,6 @@ int main(int argc, char* argv[]) {
     pthread_condattr_setpshared(&cond_attr, PTHREAD_PROCESS_SHARED);
     pthread_cond_init(&shared_block->turn_condition, &cond_attr);
 
-    // FIX: Initialize the artifact wait states to -1.
-    // mmap sets them to 0 (which breaks the scheduler because 0 is a valid artifact!)
     for (int i = 0; i < 4; i++) {
         shared_block->state.players_artifact_state[i].waiting_for_artifact_idx = -1;
         shared_block->state.players_artifact_state[i].holding_artifact_idx = -1;
@@ -537,6 +657,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // CAPTURE THE ASP PID FOR THE ULTIMATE ABILITY HANDLER
+    g_asp_pid = asp_pid;
+
     pthread_mutex_lock(&shared_block->global_mutex);
     shared_block->state.current_turn_owner_id = -2;
     pthread_cond_broadcast(&shared_block->turn_condition);
@@ -551,10 +674,11 @@ int main(int argc, char* argv[]) {
     shared_block->hip_mailbox.is_ready = false;
     pthread_mutex_unlock(&shared_block->global_mutex);
 
-    // --- INJECT ARTIFACTS FOR TESTING ---
-    shared_block->state.num_artifacts = 2;
+    // --- INJECT ARTIFACTS ---
+    shared_block->state.num_artifacts = 3;
     new (&shared_block->state.artifacts[0]) Artifact(0, ArtifactType::SOLAR_CORE, "Solar Core", 95, 10);
     new (&shared_block->state.artifacts[1]) Artifact(1, ArtifactType::LUNAR_BLADE, "Lunar Blade", 90, 10);
+    new (&shared_block->state.artifacts[2]) Artifact(2, ArtifactType::ECLIPSE_RELIC, "Eclipse Relic", 0, 5); // Exists = False by default
 
     pthread_create(&stamina_accumalator, NULL, stamina_recovery, shared_block);
     pthread_create(&deadlock_detector, NULL, deadlock_detection, shared_block);
@@ -611,7 +735,6 @@ int main(int argc, char* argv[]) {
                 std::cout << "[ARBITER] Wave cleared! Loading Sublevel " << shared_block->state.sublevel << "...\n";
                 arbiter.initialize_entities(240607, 7, 7, shared_block->state.level, shared_block->state.sublevel);
                 arbiter.initialize_players_positions(shared_block->state.level, shared_block->state.sublevel);
-
 
                 for(int i = 0; i < shared_block->state.num_active_players; ++i) shared_block->state.players[i].setStamina(0);
                 kill(asp_pid, SIGUSR1);
