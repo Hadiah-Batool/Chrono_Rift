@@ -63,6 +63,19 @@ constexpr float PANEL_H = SB_H - PANEL_Y;
 // Enemy card sizing — dynamic, fits 4-9
 constexpr float ENEMY_CARD_H = 70.f;
 constexpr float ENEMY_CARD_GAP = 4.f;
+
+// ── Player static sprites ─────────────────────────────────────────────
+sf::Texture m_playerTextures[4];   // one per player slot
+sf::Sprite  m_playerSprites[4];
+bool        m_playerSpritesLoaded = false;
+
+static constexpr const char* PLAYER_SPRITE_PATHS[] = {
+    "../Players/Chrono_sprite_back_frame1.png",   // CHRONO
+    "../Players/Frog_sprite_backframe1.png",     // FROG
+    "../Players/Marle_sprite_backframe1.png",    // MARLE
+    "../Players/Magus_sprite_backframe1.png",    // MAGUS
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Colours
 // ─────────────────────────────────────────────────────────────────────────────
@@ -214,6 +227,7 @@ private:
     int  m_activeTurnId   = 0;
     bool m_activeIsPlayer = true;
     int  m_activeIdx      = 0;     // which player the sidebar shows
+    int m_lastActivePlayerIdx=0;
 
     SidebarMode m_sidebarMode;
 
@@ -371,6 +385,11 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
         if (isShmMode()) return m_shm->players[i].getMaxStamina();
         return m_localPlayers[i] ? m_localPlayers[i]->getMaxStamina() : 1;
     }
+    bool getPlayerAlive(int i) const
+    {
+        if (isShmMode()) return m_shm->players[i].isAlive();
+        return m_localPlayers[i] ? m_localPlayers[i]->isAlive() : false;
+    }
 
     bool getPlayerStunned(int i) const
     {
@@ -409,6 +428,34 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
     }
 
 
+    void loadPlayerSprites()
+{
+    int count = isShmMode()
+                ? m_shm->num_active_players
+                : (int)m_localPlayers.size();
+
+    for (int i = 0; i < count; i++)
+    {
+        int typeIdx = isShmMode()
+                      ? (int)m_shm->players[i].getPlayerType()
+                      : (int)m_localPlayers[i]->getPlayerType();
+
+        if (m_playerTextures[i].loadFromFile(PLAYER_SPRITE_PATHS[typeIdx]))
+        {
+            m_playerSprites[i].setTexture(m_playerTextures[i]);
+            std::cout << "[RENDERER] Player " << i << " sprite loaded\n";
+        }
+        else
+        {
+            std::cerr << "[RENDERER] Failed to load player sprite: "
+                      << PLAYER_SPRITE_PATHS[typeIdx] << "\n";
+        }
+    }
+    m_playerSpritesLoaded = true;
+}
+
+
+
 
 
 
@@ -435,6 +482,7 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
             { "Frostbow",       "../Weapons_sprites/Frost_Bow.png"       },
             { "Splinter Stick", "../Weapons_sprites/Splinster_Stick.png" },
         };
+        loadPlayerSprites();
         for (auto& e : weaponPaths)
         {
             sf::Texture tex;
@@ -452,66 +500,36 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
     //  fireCallback — guards against enemy-turn keypresses
     // ─────────────────────────────────────────────────────────────────────────
 
-    void fireCallback(Action action, int target, int weapon)
+void fireCallback(Action action, int target, int weapon)
     {
-        if (isShmMode() && !m_shm->is_player_turn)
+        if (isShmMode())
         {
-            std::cout << "[Renderer] Input ignored — not a player turn\n";
-            return;
+            if (!m_shm->is_player_turn)
+            {
+                std::cout << "[Renderer] Input ignored — not a player turn\n";
+                return;
+            }
+            // FIX: make sure the active turn owner matches who we think is active
+            if (m_shm->current_turn_owner_id != m_activeIdx)
+            {
+                std::cout << "[Renderer] Input ignored — turn owner mismatch ("
+                          << m_shm->current_turn_owner_id
+                          << " vs activeIdx=" << m_activeIdx << ")\n";
+                return;
+            }
         }
         if (m_actionCallback)
             m_actionCallback(action, target, weapon);
         else
-
-
             std::cerr << "[Renderer] WARNING: no action callback set!\n";
     }
-std::vector<Weapon> getActivePlayerInventory() const
-{
-    std::vector<Weapon> out;
-
-    if (isShmMode())
-    {
-        if (m_activeIdx < 0 || m_activeIdx >= m_shm->num_active_players)
-            return out;
-        for (const auto& pair :
-             m_shm->players[m_activeIdx].getInventory().getEquippedWeapons())
-            out.push_back(pair.second);   // pair.second is Weapon — same as before
-        return out;
-    }
-
-    if (m_activeIdx >= (int)m_localPlayers.size()) return out;
-    Player* p = m_localPlayers[m_activeIdx];
-    if (!p) return out;
-    for (const auto& pair : p->getInventory().getEquippedWeapons())
-        out.push_back(pair.second);
-    return out;
-}
-
-
-std::vector<Weapon> getActivePlayerBackpack() const
-{
-    if (isShmMode())
-    {
-        if (m_activeIdx < 0 || m_activeIdx >= m_shm->num_active_players)
-            return {};
-        return m_shm->players[m_activeIdx].getBackpack().getWeapons();
-    }
-    if (m_activeIdx >= (int)m_localPlayers.size()) return {};
-    Player* p = m_localPlayers[m_activeIdx];
-    if (!p) return {};
-    return p->getBackpack().getWeapons();
-}
-
-
-
-
-
 
     // ─────────────────────────────────────────────────────────────────────────
     //  handleEvents
+    //  FIX: W key sends weapon ID (not slot index)
+    //       Tab only fires in BACKPACK mode and sends backpack slot index
+    //       Up/Down clamp against correct list for current sidebar mode
     // ─────────────────────────────────────────────────────────────────────────
-
     void handleEvents()
     {
         sf::Event e{};
@@ -553,18 +571,29 @@ std::vector<Weapon> getActivePlayerBackpack() const
                         }
                         break;
 
-                    // ── Weapon cursor ─────────────────────────────────────────
+                    // ── Weapon cursor — FIX: clamp against correct list ───────
                     case sf::Keyboard::Up:
-                        m_selectedWeapon = std::max(0, m_selectedWeapon - 1);
+                    {
+                        int limit = (m_sidebarMode == SidebarMode::BACKPACK)
+                            ? (int)getActivePlayerBackpack().size()
+                            : (int)getActivePlayerInventory().size();
+                        if (limit > 0)
+                            m_selectedWeapon = (m_selectedWeapon - 1 + limit) % limit;
                         std::cout << "[Renderer] Selected weapon → "
                                   << m_selectedWeapon << "\n";
                         break;
-
+                    }
                     case sf::Keyboard::Down:
-                        m_selectedWeapon++;
+                    {
+                        int limit = (m_sidebarMode == SidebarMode::BACKPACK)
+                            ? (int)getActivePlayerBackpack().size()
+                            : (int)getActivePlayerInventory().size();
+                        if (limit > 0)
+                            m_selectedWeapon = (m_selectedWeapon + 1) % limit;
                         std::cout << "[Renderer] Selected weapon → "
                                   << m_selectedWeapon << "\n";
                         break;
+                    }
 
                     // ── Actions ───────────────────────────────────────────────
                     case sf::Keyboard::Space:
@@ -574,12 +603,23 @@ std::vector<Weapon> getActivePlayerBackpack() const
                         break;
 
                     case sf::Keyboard::W:
-                        std::cout << "[Renderer] W → USE_WEAPON  enemy="
-                                  << m_selectedEnemy
-                                  << "  weapon=" << m_selectedWeapon << "\n";
-                        fireCallback(Action::USE_WEAPON,
-                                     m_selectedEnemy, m_selectedWeapon);
+                    {
+                        // FIX: send the weapon's actual ID, not the slot index
+                        // arbiter's USE_WEAPON calls getWeaponById(weapon_id)
+                        std::vector<Weapon> inv = getActivePlayerInventory();
+                        if (m_selectedWeapon >= 0
+                            && m_selectedWeapon < (int)inv.size())
+                        {
+                            int wid = inv[m_selectedWeapon].getWeaponId();
+                            std::cout << "[Renderer] W → USE_WEAPON  enemy="
+                                      << m_selectedEnemy
+                                      << "  weaponId=" << wid << "\n";
+                            fireCallback(Action::USE_WEAPON, m_selectedEnemy, wid);
+                        }
+                        else
+                            std::cout << "[Renderer] W ignored — no weapon selected\n";
                         break;
+                    }
 
                     case sf::Keyboard::E:
                         std::cout << "[Renderer] E → EXHAUST  enemy="
@@ -593,10 +633,26 @@ std::vector<Weapon> getActivePlayerBackpack() const
                         break;
 
                     case sf::Keyboard::Tab:
-                        std::cout << "[Renderer] TAB → SWAP_IN  slot="
-                                  << m_selectedWeapon << "\n";
-                        fireCallback(Action::SWAP_IN, -1, m_selectedWeapon);
+                    {
+                        // FIX: only fire in BACKPACK mode
+                        // send backpack slot index (arbiter's swapInFromBackpack takes index)
+                        if (m_sidebarMode == SidebarMode::BACKPACK)
+                        {
+                            std::vector<Weapon> bp = getActivePlayerBackpack();
+                            if (m_selectedWeapon >= 0
+                                && m_selectedWeapon < (int)bp.size())
+                            {
+                                std::cout << "[Renderer] TAB → SWAP_IN  backpackSlot="
+                                          << m_selectedWeapon << "\n";
+                                fireCallback(Action::SWAP_IN, -1, m_selectedWeapon);
+                            }
+                            else
+                                std::cout << "[Renderer] TAB ignored — no backpack item selected\n";
+                        }
+                        else
+                            std::cout << "[Renderer] TAB ignored — switch to BACKPACK tab first\n";
                         break;
+                    }
 
                     case sf::Keyboard::Escape:
                         std::cout << "[Renderer] ESC → SKIP\n";
@@ -608,77 +664,72 @@ std::vector<Weapon> getActivePlayerBackpack() const
             }
         }
 
+        // ── Mouse click — sidebar tab buttons + log toggle ────────────────────
+        bool mouseDown  = sf::Mouse::isButtonPressed(sf::Mouse::Left);
+        bool clicked    = mouseDown && !m_prevMouseDown;
+        m_prevMouseDown = mouseDown;
 
-
-// ── Mouse click — sidebar tab buttons + log toggle ────────────────────
-bool mouseDown  = sf::Mouse::isButtonPressed(sf::Mouse::Left);
-bool clicked    = mouseDown && !m_prevMouseDown;
-m_prevMouseDown = mouseDown;
-
-if (clicked)
-{
-    sf::Vector2i mp = sf::Mouse::getPosition(m_window);
-    float mx = (float)mp.x;
-    float my = (float)mp.y;
-
-    // ── Tab buttons ───────────────────────────────────────────────────
-    if (my >= BTN_Y && my < BTN_Y + BTN_H)
-    {
-        float b1x = SB_X + PAD;
-        float b2x = b1x + BTN_W + 2.f;
-        float b3x = b2x + BTN_W + 2.f;
-
-        if (mx >= b1x && mx < b1x + BTN_W)
+        if (clicked)
         {
-            m_sidebarMode = SidebarMode::ENEMIES;
-            std::cout << "[Renderer] Tab -> ENEMIES\n";
-        }
-        else if (mx >= b2x && mx < b2x + BTN_W)
-        {
-            m_sidebarMode = SidebarMode::INVENTORY;
-            std::cout << "[Renderer] Tab -> INVENTORY\n";
-        }
-        else if (mx >= b3x && mx < b3x + BTN_W)
-        {
-            m_sidebarMode = SidebarMode::BACKPACK;
-            std::cout << "[Renderer] Tab -> BACKPACK\n";
+            sf::Vector2i mp = sf::Mouse::getPosition(m_window);
+            float mx = (float)mp.x;
+            float my = (float)mp.y;
+
+            if (my >= BTN_Y && my < BTN_Y + BTN_H)
+            {
+                float b1x = SB_X + PAD;
+                float b2x = b1x + BTN_W + 2.f;
+                float b3x = b2x + BTN_W + 2.f;
+
+                if      (mx >= b1x && mx < b1x + BTN_W)
+                { m_sidebarMode = SidebarMode::ENEMIES;    m_selectedWeapon = 0; }
+                else if (mx >= b2x && mx < b2x + BTN_W)
+                { m_sidebarMode = SidebarMode::INVENTORY;  m_selectedWeapon = 0; }
+                else if (mx >= b3x && mx < b3x + BTN_W)
+                { m_sidebarMode = SidebarMode::BACKPACK;   m_selectedWeapon = 0; }
+            }
+
+            float logBtnX = SB_X + SB_W - PAD - 24.f;
+            float logBtnY = LOG_Y + 4.f;
+            if (mx >= logBtnX && mx < logBtnX + 22.f
+             && my >= logBtnY && my < logBtnY + 18.f)
+                m_logExpanded = !m_logExpanded;
         }
     }
 
-    // ── Log toggle button ─────────────────────────────────────────────
-    float logBtnX = SB_X + SB_W - PAD - 24.f;
-    float logBtnY = LOG_Y + 4.f;
-    if (mx >= logBtnX && mx < logBtnX + 22.f
-     && my >= logBtnY && my < logBtnY + 18.f)
-    {
-        m_logExpanded = !m_logExpanded;
-        std::cout << "[Renderer] Log expanded -> "
-                  << (m_logExpanded ? "YES" : "NO") << "\n";
-    }
-}
-
- }
-
     // ─────────────────────────────────────────────────────────────────────────
-    //  drawAll — master draw call, called every frame
+    //  drawAll — master draw call
     // ─────────────────────────────────────────────────────────────────────────
-
     void drawAll(float dt)
     {
-        // Map background
+        if (isShmMode())
+        {
+            int  owner    = m_shm->current_turn_owner_id;
+            bool isPlayer = m_shm->is_player_turn;
+            int  numP     = m_shm->num_active_players;
+
+            if (isPlayer && owner >= 0 && owner < numP)
+            {
+                m_activeTurnId        = owner;
+                m_activeIsPlayer      = true;
+                m_activeIdx           = owner;   // FIX: keep in sync
+                m_lastActivePlayerIdx = owner;
+            }
+            else if (!isPlayer && owner >= numP)
+            {
+                m_activeTurnId   = owner;
+                m_activeIsPlayer = false;
+                // m_activeIdx and m_lastActivePlayerIdx stay on last player
+                // so sidebar keeps showing that player's stats during enemy turn
+            }
+        }
+
         if (m_map) m_map->draw(m_window);
         else       std::cerr << "[Renderer] Map pointer is null\n";
-            updateAndDrawEnemies(m_window, dt);  
 
-        // Local mode only — draw character sprites via their own draw() BULLSHI
-        // if (!isShmMode())
-        // {
-        //     // for (Player*    p : m_localPlayers) if (p) p->draw(m_window);
-        //     // for (Character* e : m_localEnemies) if (e) e->draw(m_window);
-        // }
-
+        drawPlayers();
+        updateAndDrawEnemies(m_window, dt);
         drawTurnBanner();
-
         drawSidebarBg();
         drawActiveSection();
         drawToggleButtons();
@@ -693,6 +744,93 @@ if (clicked)
 
         drawHUD();
     }
+
+std::vector<Weapon> getActivePlayerInventory() const
+    {
+        std::vector<Weapon> out;
+        int pi = m_activeIdx;
+
+        if (isShmMode())
+        {
+            if (pi < 0 || pi >= m_shm->num_active_players) return out;
+            for (const auto& pair :
+                 m_shm->players[pi].getInventory().getEquippedWeapons())
+                out.push_back(pair.second);
+            return out;
+        }
+        if (pi < 0 || pi >= (int)m_localPlayers.size()) return out;
+        Player* p = m_localPlayers[pi];
+        if (!p) return out;
+        for (const auto& pair : p->getInventory().getEquippedWeapons())
+            out.push_back(pair.second);
+        return out;
+    }
+
+    std::vector<Weapon> getActivePlayerBackpack() const
+    {
+        int pi = m_activeIdx;
+        if (isShmMode())
+        {
+            if (pi < 0 || pi >= m_shm->num_active_players) return {};
+            return m_shm->players[pi].getBackpack().getWeapons();
+        }
+        if (pi < 0 || pi >= (int)m_localPlayers.size()) return {};
+        Player* p = m_localPlayers[pi];
+        if (!p) return {};
+        return p->getBackpack().getWeapons();
+    }
+
+
+
+
+
+
+
+
+
+
+void drawPlayers()
+{
+    if (!m_playerSpritesLoaded) return;
+
+    int count = isShmMode()
+                ? m_shm->num_active_players
+                : (int)m_localPlayers.size();
+
+    for (int i = 0; i < count; i++)
+    {
+        // Pull position + scale straight from shm each frame
+        float x, y, sx, sy;
+        bool  alive;
+
+        if (isShmMode())
+        {
+            const Player& p = m_shm->players[i];
+            if (!p.isAlive()) continue;
+            x  = p.getXPos();
+            y  = p.getYPos();
+            sx = p.getScaleX();
+            sy = p.getScaleY();
+
+        }
+        else
+        {
+            const Player* p = static_cast<Player*>(m_localPlayers[i]);
+            if (!p->isAlive()) continue;
+            x  = p->getXPos();
+            y  = p->getYPos();
+            sx = p->getScaleX();
+            sy = p->getScaleY();
+        }
+
+        m_playerSprites[i].setPosition(x, y);
+        m_playerSprites[i].setScale(sx, sy);
+        m_window.draw(m_playerSprites[i]);
+    }
+}
+
+
+
 
     // ─────────────────────────────────────────────────────────────────────────
     //  drawTurnBanner
@@ -747,78 +885,85 @@ void drawHUD()
     // ─────────────────────────────────────────────────────────────────────────
     //  drawActiveSection — active player's HP / stamina / status
     // ─────────────────────────────────────────────────────────────────────────
-void drawActiveSection()
-{
-    drawRect(SB_X, SEC_ACTIVE_Y, SB_W, SEC_ACTIVE_H, Colour::SectionBg);
-    drawDivider(SEC_ACTIVE_Y + SEC_ACTIVE_H);
-
-    int total = totalPlayerCount();
-    if (total == 0 || m_activeIdx >= total) return;
-
-    float x = SB_X + PAD;
-    float y = SEC_ACTIVE_Y + 6.f;
-
-    // ── Name + status badge on same line ──────────────────────────────────
-    drawText(getPlayerName(m_activeIdx), x, y, FONT_MD, Colour::TxtName);
-    drawStatusBadge(SB_X + SB_W - PAD - 70.f, y + 1.f,
-                    isPlayerAlive(m_activeIdx),
-                    getPlayerStunned(m_activeIdx));
-    y += 24.f;
-
-    // ── HP ────────────────────────────────────────────────────────────────
-    bool  stunned  = getPlayerStunned(m_activeIdx);
-    float hpRatio  = (float)getPlayerHp(m_activeIdx)
-                   / (float)std::max(1, getPlayerMaxHp(m_activeIdx));
-    sf::Color hpCol = stunned ? Colour::StunBadge
-                    : (hpRatio < 0.3f ? Colour::HpLow : Colour::HpFull);
-
-    drawText("HP  " + std::to_string(getPlayerHp(m_activeIdx))
-             + " / " + std::to_string(getPlayerMaxHp(m_activeIdx)),
-             x, y, FONT_XS, Colour::TxtMuted);
-    y += 14.f;
-    drawBar(x, y, SB_W - PAD * 2, 12.f,
-            getPlayerHp(m_activeIdx), getPlayerMaxHp(m_activeIdx),
-            Colour::HpBack, hpCol);
-    y += 18.f;
-
-    // ── Stamina ───────────────────────────────────────────────────────────
-    drawText("STM " + std::to_string(getPlayerStamina(m_activeIdx))
-             + " / " + std::to_string(getPlayerMaxStamina(m_activeIdx)),
-             x, y, FONT_XS, Colour::TxtMuted);
-    y += 14.f;
-    drawBar(x, y, SB_W - PAD * 2, 8.f,
-            getPlayerStamina(m_activeIdx), getPlayerMaxStamina(m_activeIdx),
-            Colour::StamBack, Colour::StamFull);
-    y += 16.f;
-
-    // ── All players mini-row ──────────────────────────────────────────────
-    // Shows every player as a tiny HP bar so you always see party health
-    drawText("PARTY", x, y, FONT_XS, Colour::TxtMuted);
-    y += 14.f;
-
-    float miniW = (SB_W - PAD * 2 - (total - 1) * 4.f) / (float)total;
-    for (int i = 0; i < total; i++)
+// ─────────────────────────────────────────────────────────────────────────
+    //  drawActiveSection
+    //  FIX: removed dangling displayIdx, removed duplicate total declaration,
+    //       all stats now read from pi (= m_activeIdx, clamped)
+    // ─────────────────────────────────────────────────────────────────────────
+    void drawActiveSection()
     {
-        float mx = x + i * (miniW + 4.f);
-        sf::Color miniCol = (i == m_activeIdx)
-            ? Colour::ActiveTurn
-            : (isPlayerAlive(i) ? Colour::HpFull : Colour::DeadBadge);
+        drawRect(SB_X, SEC_ACTIVE_Y, SB_W, SEC_ACTIVE_H, Colour::SectionBg);
+        drawDivider(SEC_ACTIVE_Y + SEC_ACTIVE_H);
 
-        drawBar(mx, y, miniW, 10.f,
-                getPlayerHp(i), std::max(1, getPlayerMaxHp(i)),
-                Colour::HpBack, miniCol);
+        int total = totalPlayerCount();
+        if (total == 0) return;
 
-        // tiny name under bar
-        std::string abbr = getPlayerName(i).substr(0, 3);
-        drawText(abbr, mx + 2.f, y + 12.f, FONT_XS - 2, Colour::TxtMuted);
+        // FIX: derive display index from m_activeIdx, clamped
+        int pi = std::max(0, std::min(m_activeIdx, total - 1));
+
+        float x = SB_X + PAD;
+        float y = SEC_ACTIVE_Y + 6.f;
+
+        // ── Name + status badge ───────────────────────────────────────────────
+        drawText(getPlayerName(pi), x, y, FONT_MD, Colour::TxtName);
+        drawStatusBadge(SB_X + SB_W - PAD - 70.f, y + 1.f,
+                        getPlayerAlive(pi),
+                        getPlayerStunned(pi));
+        y += 24.f;
+
+        // ── HP ────────────────────────────────────────────────────────────────
+        bool      stunned = getPlayerStunned(pi);
+        float     hpRatio = (float)getPlayerHp(pi)
+                          / (float)std::max(1, getPlayerMaxHp(pi));
+        sf::Color hpCol   = stunned        ? Colour::StunBadge
+                          : hpRatio < 0.3f ? Colour::HpLow
+                                           : Colour::HpFull;
+
+        drawText("HP  " + std::to_string(getPlayerHp(pi))
+                 + " / " + std::to_string(getPlayerMaxHp(pi)),
+                 x, y, FONT_XS, Colour::TxtMuted);
+        y += 14.f;
+        drawBar(x, y, SB_W - PAD * 2, 12.f,
+                getPlayerHp(pi), getPlayerMaxHp(pi),
+                Colour::HpBack, hpCol);
+        y += 18.f;
+
+        // ── Stamina ───────────────────────────────────────────────────────────
+        drawText("STM " + std::to_string(getPlayerStamina(pi))
+                 + " / " + std::to_string(getPlayerMaxStamina(pi)),
+                 x, y, FONT_XS, Colour::TxtMuted);
+        y += 14.f;
+        drawBar(x, y, SB_W - PAD * 2, 8.f,
+                getPlayerStamina(pi), getPlayerMaxStamina(pi),
+                Colour::StamBack, Colour::StamFull);
+        y += 16.f;
+
+        // ── Party mini-row ────────────────────────────────────────────────────
+        drawText("PARTY", x, y, FONT_XS, Colour::TxtMuted);
+        y += 14.f;
+
+        float miniW = (SB_W - PAD * 2 - (total - 1) * 4.f) / (float)total;
+        for (int i = 0; i < total; i++)
+        {
+            float mx = x + i * (miniW + 4.f);
+            sf::Color miniCol = (i == pi)
+                ? Colour::ActiveTurn
+                : (isPlayerAlive(i) ? Colour::HpFull : Colour::DeadBadge);
+
+            drawBar(mx, y, miniW, 10.f,
+                    getPlayerHp(i), std::max(1, getPlayerMaxHp(i)),
+                    Colour::HpBack, miniCol);
+
+            std::string abbr = getPlayerName(i).substr(0, 3);
+            drawText(abbr, mx + 2.f, y + 12.f, FONT_XS - 2, Colour::TxtMuted);
+        }
+        y += 28.f;
+
+        if (stunned)
+            drawText("STUNNED — clears T"
+                     + std::to_string(getPlayerStunEnd(pi)),
+                     x, y, FONT_XS, Colour::StunBadge);
     }
-
-    y += 28.f;
-
-    if (stunned)
-        drawText("STUNNED — clears T" + std::to_string(getPlayerStunEnd(m_activeIdx)),
-                 x, y, FONT_XS, Colour::StunBadge);
-}
 
 
     // ─────────────────────────────────────────────────────────────────────────

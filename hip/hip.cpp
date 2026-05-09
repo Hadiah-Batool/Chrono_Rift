@@ -357,7 +357,7 @@ int main(int argc, char* argv[])
     std::cout << "[HIP] Setup complete — Arbiter acknowledged\n";
 
     // ── PHASE 5: Open game window + spawn player threads ─────────────────────
-    Map map(0.0f, 0.0f, 800, 800);
+    Map map(0.0f, 0.0f, 860, 800);
     map.loadScreens({ "../MapsNScreen/Fiaona'aForest_Lvl_tile1.png" });
 
     Renderer renderer(shm, &map);

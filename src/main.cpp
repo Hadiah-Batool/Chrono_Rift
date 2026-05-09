@@ -12,7 +12,7 @@
 // ─── Window size ─────────────────────────────────────────────────────────────
 constexpr float T_WIN_W = 1200.f;
 constexpr float T_WIN_H = 800.f;
-constexpr float T_MAP_W = 800.f;
+constexpr float T_MAP_W = 860.f;
 constexpr float T_MAP_H = 800.f;
 
 // ─────────────────────────────────────────────────────────────────────────────
