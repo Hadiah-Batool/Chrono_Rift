@@ -31,7 +31,7 @@ struct EnemyThreadCtx
 // ─────────────────────────────────────────────────────────────────────────────
 struct ASPContext
 {
-    SharedMemoryBlock*          shm;
+    SharedMemoryBlock* shm;
     int                         numEnemies;
     int                         running;        // 1 = alive, 0 = stop
     pthread_mutex_t             running_mutex;
@@ -62,27 +62,43 @@ static int get_running(ASPContext* ctx)
 // ─────────────────────────────────────────────────────────────────────────────
 static ASPContext* g_ctx = nullptr;
 
+// SECTION 5: Asynchronous Stun Interrupt
 static void onSigusr1(int)
 {
-    // stun timestamp already written into shm by arbiter
-    // enemy threads check isStunned() themselves
+    if (g_ctx) {
+        // True non-blocking interrupt!
+        // We broadcast to wake up ALL sleeping enemy threads instantly so they
+        // evaluate their new isStunned() status without waiting for their turn.
+        pthread_cond_broadcast(&g_ctx->shm->turn_condition);
+    }
 }
 
+// SECTION 10: Graceful Quit
 static void onSigterm(int)
 {
     if (g_ctx)
     {
+        std::cout << "\n[ASP] Received SIGTERM from Arbiter. Shutting down enemy threads...\n";
         set_running(g_ctx, 0);
-        // wake all enemy threads so they can exit their cond_wait
+        // Wake all enemy threads so they can exit their cond_wait gracefully
         pthread_cond_broadcast(&g_ctx->shm->turn_condition);
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  decide_action — simple enemy AI
+//  decide_action — Enemy AI (Section 10)
 // ─────────────────────────────────────────────────────────────────────────────
 static void decide_action(int enemyIndex, SharedMemoryBlock* shm)
 {
+    // RUBRIC REQUIREMENT: 10% chance to SKIP
+    if (rand() % 100 < 10) {
+        shm->asp_mailbox.action_type          = Action::SKIP;
+        shm->asp_mailbox.requesting_entity_id = enemyIndex;
+        shm->asp_mailbox.is_ready             = true;
+        std::cout << "[ASP] Enemy " << enemyIndex << " chose to SKIP its turn.\n";
+        return;
+    }
+
     int numPlayers = shm->state.num_active_players;
 
     // collect alive players
@@ -92,8 +108,15 @@ static void decide_action(int enemyIndex, SharedMemoryBlock* shm)
         if (shm->state.players[i].isAlive())
             alivePlayers[aliveCount++] = i;
 
-    if (aliveCount == 0) return;
+    // If no players are alive, skip
+    if (aliveCount == 0) {
+        shm->asp_mailbox.action_type          = Action::SKIP;
+        shm->asp_mailbox.requesting_entity_id = enemyIndex;
+        shm->asp_mailbox.is_ready             = true;
+        return;
+    }
 
+    // 90% chance to STRIKE a random alive player
     int target = alivePlayers[rand() % aliveCount];
 
     shm->asp_mailbox.action_type          = Action::STRIKE;
@@ -107,7 +130,7 @@ static void decide_action(int enemyIndex, SharedMemoryBlock* shm)
 // ─────────────────────────────────────────────────────────────────────────────
 static void* enemyThreadFunc(void* arg)
 {
-    EnemyThreadCtx*    ctx = (EnemyThreadCtx*)arg;
+    EnemyThreadCtx* ctx = (EnemyThreadCtx*)arg;
     SharedMemoryBlock* shm = ctx->shm;
     const int          me  = ctx->enemyIndex;
 
@@ -118,6 +141,12 @@ static void* enemyThreadFunc(void* arg)
 
         while (get_running(ctx->ctx))
         {
+            // RUBRIC REQUIREMENT: Thread-per-NPC Lifecycle Exit
+            // If this enemy was killed by a player, gracefully exit the thread!
+            if (!shm->state.enemies[me].isAlive()) {
+                break;
+            }
+
             int  owner  = shm->state.current_turn_owner_id;
             bool myTurn = !shm->state.is_player_turn &&
                           (owner == shm->state.num_active_players + me);
@@ -126,15 +155,22 @@ static void* enemyThreadFunc(void* arg)
             pthread_cond_wait(&shm->turn_condition, &shm->global_mutex);
         }
 
-        if (!get_running(ctx->ctx))
+        // Check if we need to exit due to game over or death
+        if (!get_running(ctx->ctx) || !shm->state.enemies[me].isAlive())
         {
             pthread_mutex_unlock(&shm->global_mutex);
-            break;
+            std::cout << "[ASP] Enemy " << me << " has fallen. Thread terminating.\n";
+            break; // Exits the while loop and kills the thread
         }
 
-        // 2. If stunned — release lock, arbiter will timeout and SKIP us
+        // 2. If stunned — release lock and yield turn explicitly
         if (shm->state.enemies[me].isStunned())
         {
+            shm->asp_mailbox.action_type          = Action::SKIP;
+            shm->asp_mailbox.requesting_entity_id = me;
+            shm->asp_mailbox.is_ready             = true;
+
+            pthread_cond_broadcast(&shm->turn_condition);
             pthread_mutex_unlock(&shm->global_mutex);
             continue;
         }
