@@ -112,7 +112,7 @@ public:
                 std::cout << "[ARBITER] Parsing " << filename << ". Spawning " << num_enemies << " enemies.\n";
                 for (int i = 0; i < num_enemies; ++i) {
                     int x, y, type;
-                    if (infile >> x >> y >> type) 
+                    if (infile >> x >> y >> type)
                     {
                         new (&shared_block->state.enemies[i]) Enemy(i, static_cast<EnemyType>(type));
                         shared_block->state.enemies[i].setRollNumber(seed_roll_full, seed_last_dig, seed_last_two);
@@ -129,6 +129,31 @@ public:
             infile.close();
         } else {
             std::cerr << "[ARBITER] CRITICAL: Could not open " << filename << "\n";
+        }
+    }
+
+
+    void initialize_players_positions(int level, int sublevel) {
+        std::string filename = "player_description/level_" + std::to_string(level) + "_sublevel_" + std::to_string(sublevel) + ".txt";
+        std::ifstream infile(filename);
+        if (infile.is_open()) {
+            int num_players_in_file;
+            if (infile >> num_players_in_file) {
+                std::cout << "[ARBITER] Parsing " << filename << " for player positions.\n";
+                // Only position the number of players actually in the game
+                int limit = std::min(num_players_in_file, shared_block->state.num_active_players);
+                for (int i = 0; i < limit; ++i) {
+                    int x, y, type;
+                    // We read 'type' from the file but ignore it, because the HIP Menu already set the correct PlayerType!
+                    if (infile >> x >> y >> type) {
+                        shared_block->state.players[i].InitAllProperties(static_cast<float>(x), static_cast<float>(y));
+                        std::cout << "  -> Positioned Player " << i << " at (" << x << ", " << y << ")\n";
+                    }
+                }
+            }
+            infile.close();
+        } else {
+            std::cerr << "[ARBITER] WARNING: Could not open " << filename << "\n";
         }
     }
 
@@ -212,6 +237,13 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
 
     switch (request.action_type) {
     case Action::STRIKE: {
+        // Prevent hitting dead enemies
+        if (!shared_block->state.enemies[target_id].isAlive()) {
+            std::cout << "[ARBITER] Target already dead. Strike wasted!\n";
+            shared_block->state.players[attacker_id].ResetStamina();
+            break;
+        }
+
         int damage = shared_block->state.players[attacker_id].getDemage();
         shared_block->state.enemies[target_id].TakeDamage(damage);
 
@@ -221,7 +253,7 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         if (!shared_block->state.enemies[target_id].isAlive()) {
             release_artifact_from_enemy(shared_block, target_id);
             shared_block->state.enemies_defeated++;
-            shared_block->state.num_active_enemies--;
+            // CRITICAL FIX: Removed num_active_enemies-- so the array indexing doesn't break!
             std::cout << "[ARBITER] Enemy " << target_id << " defeated! Total: " << shared_block->state.enemies_defeated << "/10\n";
         }
         shared_block->state.players[attacker_id].ResetStamina();
@@ -235,20 +267,25 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         break;
     }
     case Action::USE_WEAPON: {
+        // Prevent hitting dead enemies
+        if (!shared_block->state.enemies[target_id].isAlive()) {
+            std::cout << "[ARBITER] Target already dead. Weapon strike wasted!\n";
+            shared_block->state.players[attacker_id].ResetStamina();
+            break;
+        }
+
         int weapon_id     = shared_block->hip_mailbox.weapon_id;
-Weapon w;
-int weapon_damage = 0;
-if (shared_block->state.players[attacker_id]
-        .getInventory().getWeaponById(weapon_id, w))
-{
-    weapon_damage = w.getDamage();
-}
+        Weapon w;
+        int weapon_damage = 0;
+        if (shared_block->state.players[attacker_id].getInventory().getWeaponById(weapon_id, w)) {
+            weapon_damage = w.getDamage();
+        }
 
         shared_block->state.enemies[target_id].TakeDamage(weapon_damage);
         if (!shared_block->state.enemies[target_id].isAlive()) {
             release_artifact_from_enemy(shared_block, target_id);
             shared_block->state.enemies_defeated++;
-            shared_block->state.num_active_enemies--;
+            // CRITICAL FIX: Removed num_active_enemies--
             std::cout << "[ARBITER] Enemy " << target_id << " eliminated by weapon!\n";
         }
         shared_block->state.players[attacker_id].ResetStamina();
@@ -312,6 +349,10 @@ void handle_enemy_action(const ActionRequest& request, SharedMemoryBlock* shared
 
     switch (request.action_type) {
     case Action::STRIKE: {
+        if (!shared_block->state.players[target_id].isAlive()) {
+            std::cout << "[ARBITER] Player " << target_id << " is already dead! Ignoring action.\n";
+            break;
+        }
         int damage = shared_block->state.enemies[attacker_id].getDemage();
         shared_block->state.players[target_id].TakeDamage(damage);
 
@@ -505,6 +546,8 @@ int main(int argc, char* argv[]) {
     handle_player_action(shared_block->hip_mailbox, shared_block);
 
     arbiter.initialize_entities(240607, 7, 7, shared_block->state.level, shared_block->state.sublevel);
+    arbiter.initialize_players_positions(shared_block->state.level, shared_block->state.sublevel);
+
     shared_block->hip_mailbox.is_ready = false;
     pthread_mutex_unlock(&shared_block->global_mutex);
 
@@ -567,6 +610,9 @@ int main(int argc, char* argv[]) {
                 shared_block->state.sublevel++;
                 std::cout << "[ARBITER] Wave cleared! Loading Sublevel " << shared_block->state.sublevel << "...\n";
                 arbiter.initialize_entities(240607, 7, 7, shared_block->state.level, shared_block->state.sublevel);
+                arbiter.initialize_players_positions(shared_block->state.level, shared_block->state.sublevel);
+
+
                 for(int i = 0; i < shared_block->state.num_active_players; ++i) shared_block->state.players[i].setStamina(0);
                 kill(asp_pid, SIGUSR1);
                 shared_block->state.current_turn_owner_id = -3;
