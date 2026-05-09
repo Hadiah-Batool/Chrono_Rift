@@ -272,6 +272,12 @@ void* stamina_recovery(void* arg){
     auto* shared_block = static_cast<SharedMemoryBlock*>(arg);
     while(true){
         pthread_mutex_lock(&shared_block->global_mutex);
+        // ADD THIS CHECK TO BREAK INSTANTLY:
+        if (!shared_block->state.game_running || g_sigterm_received) {
+            pthread_mutex_unlock(&shared_block->global_mutex);
+            break;
+        }
+
         if (shared_block->state.game_running && !shared_block->state.hassublevelended) {
             int current_turn = shared_block->state.turn_count;
 
@@ -437,7 +443,7 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         shared_block->state.num_active_players = shared_block->hip_mailbox.target_id;
         for (int i = 0; i < shared_block->state.num_active_players; i++) {
             new (&shared_block->state.players[i]) Player(shared_block->hip_mailbox.types[i]);
-            shared_block->state.players[i].setRollNumber(240607, 7, 7);
+            shared_block->state.players[i].setRollNumber(0607, 7, 7);
             shared_block->state.players[i].initRollStats(100.0f / shared_block->state.num_active_players);
         }
         break;
@@ -587,7 +593,7 @@ void* deadlock_detection(void* arg) {
     auto* sb = static_cast<SharedMemoryBlock*>(arg);
     while (true) {
         sleep(10);
-        if (!sb->state.game_running) break;
+        if (!sb->state.game_running || g_sigterm_received) break;
 
         pthread_mutex_lock(&sb->resource_table_mutex);
         bool deadlock_found = false;
@@ -694,12 +700,12 @@ int main(int argc, char* argv[]) {
 
     pid_t hip_pid = fork();
     if (hip_pid == 0) { execl("./hip.out", "./hip.out", shm_name, nullptr);
-        cout<<"Could not launch HIP process. Make sure hip.out is compiled and in the same directory."<<endl;
+        std::cout<<"Could not launch HIP process. Make sure hip.out is compiled and in the same directory.\n";
         return 1;
      }
     pid_t asp_pid = fork();
     if (asp_pid == 0) { execl("./asp.out", "./asp.out", shm_name, nullptr);
-        cout<<"Could not launch ASP process. Make sure asp.out is compiled and in the same directory."<<endl;
+        std::cout<<"Could not launch ASP process. Make sure asp.out is compiled and in the same directory.\n";
         return 1;
     }
 
@@ -709,12 +715,16 @@ int main(int argc, char* argv[]) {
     pthread_mutex_lock(&shared_block->global_mutex);
     shared_block->state.current_turn_owner_id = -2;
     pthread_cond_broadcast(&shared_block->turn_condition);
-    while (!shared_block->hip_mailbox.is_ready) {
+
+    // Handshake: Check signal flag so it breaks if interrupted early
+    while (!shared_block->hip_mailbox.is_ready && !g_sigterm_received) {
         pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
     }
-    handle_player_action(shared_block->hip_mailbox, shared_block);
+    if (!g_sigterm_received) {
+        handle_player_action(shared_block->hip_mailbox, shared_block);
+    }
 
-    arbiter.initialize_entities(240607, 7, 7, shared_block->state.level, shared_block->state.sublevel);
+    arbiter.initialize_entities(0607, 7, 7, shared_block->state.level, shared_block->state.sublevel);
     arbiter.initialize_players_positions(shared_block->state.level, shared_block->state.sublevel);
 
     shared_block->hip_mailbox.is_ready = false;
@@ -741,9 +751,17 @@ int main(int argc, char* argv[]) {
             pthread_cond_broadcast(&shared_block->turn_condition);
 
             if (is_player) {
-                while (!shared_block->hip_mailbox.is_ready && shared_block->state.game_running) {
+                // ADDED && !g_sigterm_received
+                while (!shared_block->hip_mailbox.is_ready && shared_block->state.game_running && !g_sigterm_received) {
                     pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
                 }
+
+                // IF SIGNAL RECEIVED, UNLOCK AND ABORT
+                if (g_sigterm_received) {
+                    pthread_mutex_unlock(&shared_block->global_mutex);
+                    break;
+                }
+
                 if (shared_block->state.game_running) {
                     handle_player_action(shared_block->hip_mailbox, shared_block);
                 }
@@ -752,9 +770,18 @@ int main(int argc, char* argv[]) {
                 clock_gettime(CLOCK_REALTIME, &ts);
                 ts.tv_sec += 3;
                 int res = 0;
-                while (!shared_block->asp_mailbox.is_ready && res != ETIMEDOUT && shared_block->state.game_running) {
+
+                // ADDED && !g_sigterm_received
+                while (!shared_block->asp_mailbox.is_ready && res != ETIMEDOUT && shared_block->state.game_running && !g_sigterm_received) {
                     res = pthread_cond_timedwait(&shared_block->turn_condition, &shared_block->global_mutex, &ts);
                 }
+
+                // IF SIGNAL RECEIVED, UNLOCK AND ABORT
+                if (g_sigterm_received) {
+                    pthread_mutex_unlock(&shared_block->global_mutex);
+                    break;
+                }
+
                 if (shared_block->state.game_running) {
                     if (res == ETIMEDOUT && !shared_block->asp_mailbox.is_ready) {
                         shared_block->asp_mailbox.action_type = Action::SKIP;
@@ -783,7 +810,7 @@ int main(int argc, char* argv[]) {
                 shared_block->state.hassublevelended = true;
                 shared_block->state.sublevel++;
                 std::cout << "[ARBITER] Wave cleared! Loading Sublevel " << shared_block->state.sublevel << "...\n";
-                arbiter.initialize_entities(240607, 7, 7, shared_block->state.level, shared_block->state.sublevel);
+                arbiter.initialize_entities(0607, 7, 7, shared_block->state.level, shared_block->state.sublevel);
                 arbiter.initialize_players_positions(shared_block->state.level, shared_block->state.sublevel);
 
                 for(int i = 0; i < shared_block->state.num_active_players; ++i) shared_block->state.players[i].setStamina(0);
@@ -819,6 +846,7 @@ int main(int argc, char* argv[]) {
         usleep(10000);
     }
 
+    // Clean exit protocol
     kill(hip_pid, SIGTERM);
     kill(asp_pid, SIGTERM);
     waitpid(hip_pid, NULL, 0);
