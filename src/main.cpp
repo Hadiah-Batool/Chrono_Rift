@@ -98,7 +98,7 @@ int main()
     {
         // ── Logic object ──────────────────────────────────────────────────────
         Player p(g_testPlayers[i].type);
-        p.setRollNumber(240607, 7, 7);
+        p.setRollNumber(0607, 7, 7);
         p.initRollStats(25.f);
         p.setAlive(true);
         p.InitAllProperties(g_testPlayers[i].x, g_testPlayers[i].y);
