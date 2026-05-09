@@ -668,14 +668,14 @@ if (clicked)
         // Map background
         if (m_map) m_map->draw(m_window);
         else       std::cerr << "[Renderer] Map pointer is null\n";
-            updateAndDrawEnemies(m_window, dt);   // ← MOVE THIS UP, not after HU
+            updateAndDrawEnemies(m_window, dt);  
 
-        // Local mode only — draw character sprites via their own draw()
-        if (!isShmMode())
-        {
-            for (Player*    p : m_localPlayers) if (p) p->draw(m_window);
-            for (Character* e : m_localEnemies) if (e) e->draw(m_window);
-        }
+        // Local mode only — draw character sprites via their own draw() BULLSHI
+        // if (!isShmMode())
+        // {
+        //     // for (Player*    p : m_localPlayers) if (p) p->draw(m_window);
+        //     // for (Character* e : m_localEnemies) if (e) e->draw(m_window);
+        // }
 
         drawTurnBanner();
 
