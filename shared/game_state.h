@@ -83,6 +83,9 @@ struct GameState {
     } special_weapon_status;
 
     ActionLog action_log;
+
+    bool is_weapon_dropped = false;
+    Weapon dropped_weapon;
 };
 
 // ---------------------------------------------------------------------------

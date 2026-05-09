@@ -19,8 +19,10 @@ enum class Action {
     HEAL        = 4,
     SKIP        = 5,
     SETUP_GAME  = 6,
-    GET_ARTIFACT = 7,      // NEW
-    RELEASE_ARTIFACT = 8   // NEW
+    GET_ARTIFACT = 7,
+    RELEASE_ARTIFACT = 8,
+    PICKUP = 9,
+    ULTIMATE = 10
 };
 
 struct ActionLog {
