@@ -157,7 +157,7 @@ Renderer(std::vector<Player*> players, std::vector<Character*> enemies, Map* map
         m_activeTurnId   = entityId;
         m_activeIsPlayer = isPlayer;
         if (isPlayer) m_activeIdx = entityId;
-        std::cout << "[Renderer] Active turn → entity=" << entityId
+        std::cout << "[Renderer] Active turn -> entity=" << entityId
                   << (isPlayer ? " (player)\n" : " (enemy)\n");
     }
 
@@ -263,6 +263,10 @@ private:
     float       m_swapFlashTimer = 0.f;
     std::string m_swapFlashMsg   = "";
 
+        // ── Add to private members ────────────────────────────────────────────────────
+        bool m_gHeld = false;
+
+
 
 
     // Callback wired by hip.cpp
@@ -362,6 +366,39 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
             && m_localPlayers[idx]
             && m_localPlayers[idx]->isAlive();
     }
+// ── Artifact availability states ─────────────────────────────────────────────
+enum class ArtifactUIState { HIDDEN, AVAILABLE, HELD_BY_ME, HELD_BY_OTHER, WAITING };
+
+ArtifactUIState getArtifactState(int art_idx) const
+{
+    if (!isShmMode()) return ArtifactUIState::HIDDEN;
+    if (art_idx < 0 || art_idx >= m_shm->num_artifacts)
+        return ArtifactUIState::HIDDEN;
+
+    const Artifact& art = m_shm->artifacts[art_idx];
+
+    if (!art.isAvailable() && !art.isHeld())
+        return ArtifactUIState::HIDDEN;       // not introduced yet
+
+    int myIdx = m_lastActivePlayerIdx;
+
+    // Am I holding it?
+    if (myIdx >= 0 && myIdx < m_shm->num_active_players)
+        if (m_shm->players_artifact_state[myIdx].holding_artifact_idx == art_idx)
+            return ArtifactUIState::HELD_BY_ME;
+
+    // Am I waiting for it?
+    if (myIdx >= 0 && myIdx < m_shm->num_active_players)
+        if (m_shm->players_artifact_state[myIdx].waiting_for_artifact_idx == art_idx)
+            return ArtifactUIState::WAITING;
+
+    // Someone else holds it
+    if (art.isHeld())
+        return ArtifactUIState::HELD_BY_OTHER;
+
+    // Available on the field
+    return ArtifactUIState::AVAILABLE;
+}
 
     // ─────────────────────────────────────────────────────────────────────────
     //  Unified getters — all draw functions use these, never touch shm directly
@@ -506,9 +543,86 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
                 std::cerr << "[Renderer] Missing sprite: " << e.path << "\n";
         }
     }
+void drawArtifactBanners()
+{
+    if (!isShmMode()) return;
+
+    // Visual config per artifact — extend this array when you add more artifacts
+    struct ArtifactVisual {
+        sf::Color bg;
+        sf::Color border;
+        sf::Color text;
+        std::string grabMsg;
+        std::string waitMsg;
+    };
+
+    static const ArtifactVisual visuals[] = {
+        // Solar Core (idx 0)
+        { sf::Color(80, 50,  0,  230), sf::Color(255, 180,  0, 200),
+          sf::Color(255, 220,  80, 255),
+          "SOLAR CORE appeared!  G+0 to claim",
+          "Waiting for Solar Core..." },
+        // Lunar Blade (idx 1)
+        { sf::Color( 0, 20,  80, 230), sf::Color( 80, 140, 255, 200),
+          sf::Color(140, 200, 255, 255),
+          "LUNAR BLADE appeared!  G+1 to claim",
+          "Waiting for Lunar Blade..." },
+        // Eclipse Relic (idx 2)
+        { sf::Color(50,  0,  80, 230), sf::Color(180,  80, 255, 200),
+          sf::Color(210, 130, 255, 255),
+          "ECLIPSE RELIC appeared!  G+2 to claim",
+          "Waiting for Eclipse Relic..." },
+    };
+
+    constexpr float BANNER_H = 28.f;
+    constexpr float BASE_Y   = WIN_H - 26.f - BANNER_H - 2.f;  // above HUD
+
+    // Stack offset — each visible banner pushes the next one up
+    float stackOffset = m_shm->is_weapon_dropped ? (BANNER_H + 2.f) : 0.f;
+
+    int numArtifacts = m_shm->num_artifacts;
+    for (int i = 0; i < numArtifacts; ++i)
+    {
+        ArtifactUIState state = getArtifactState(i);
+        if (state == ArtifactUIState::HIDDEN || state == ArtifactUIState::HELD_BY_ME)
+            continue;   // nothing to show
+
+        float bannerY = BASE_Y - stackOffset;
+        stackOffset  += (BANNER_H + 2.f);
+
+        const ArtifactVisual& v = (i < 3) ? visuals[i] : visuals[2]; // fallback to relic style
+
+        drawRect(0.f, bannerY, MAP_W, BANNER_H, v.bg);
+        drawRect(0.f, bannerY, MAP_W, BANNER_H,
+                 sf::Color::Transparent, v.border, 1.f);
+
+        // Weapon icon if loaded
+        float textX = 10.f;
+        const std::string& aname = m_shm->artifacts[i].getName();
+        if (m_weaponTextures.count(aname))
+        {
+            sf::Sprite icon(m_weaponTextures.at(aname));
+            icon.setPosition(6.f, bannerY + 3.f);
+            icon.setScale(22.f / icon.getTexture()->getSize().x,
+                          22.f / icon.getTexture()->getSize().y);
+            m_window.draw(icon);
+            textX = 34.f;
+        }
+
+        std::string msg = (state == ArtifactUIState::WAITING)
+            ? v.waitMsg
+            : v.grabMsg;
+
+        if (state == ArtifactUIState::HELD_BY_OTHER)
+            msg = aname + " held by another entity";
+
+        drawText(msg, textX, bannerY + 7.f, FONT_XS, v.text);
+    }
+}
+
+
 // ─────────────────────────────────────────────────────────────────────────
     //  fireCallback
-    //  FIX: validate it's actually this player's turn before firing
     // ─────────────────────────────────────────────────────────────────────────
     void fireCallback(Action action, int target, int weapon)
     {
@@ -571,7 +685,7 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
                             do {
                                 m_selectedEnemy = (m_selectedEnemy + 1) % total;
                             } while (!isEnemyAlive(m_selectedEnemy));
-                            std::cout << "[Renderer] Selected enemy → "
+                            std::cout << "[Renderer] Selected enemy -> "
                                       << m_selectedEnemy << "\n";
                         }
                         break;
@@ -582,7 +696,7 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
                             do {
                                 m_selectedEnemy = (m_selectedEnemy - 1 + total) % total;
                             } while (!isEnemyAlive(m_selectedEnemy));
-                            std::cout << "[Renderer] Selected enemy → "
+                            std::cout << "[Renderer] Selected enemy -> "
                                       << m_selectedEnemy << "\n";
                         }
                         break;
@@ -595,10 +709,45 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
                             : (int)getActivePlayerInventory().size();
                         if (limit > 0)
                             m_selectedWeapon = (m_selectedWeapon - 1 + limit) % limit;
-                        std::cout << "[Renderer] Selected weapon → "
+                        std::cout << "[Renderer] Selected weapon -> "
                                   << m_selectedWeapon << "\n";
                         break;
                     }
+                    // Track G as a modifier key
+                    case sf::Keyboard::G:
+                        m_gHeld = true;
+                        break;
+
+                    case sf::Keyboard::Num0:
+                    case sf::Keyboard::Num1:
+                    case sf::Keyboard::Num2:
+                    {
+                        if (!m_gHeld || !isShmMode()) break;
+
+                        int art_idx = e.key.code - sf::Keyboard::Num0;  // 0, 1, or 2
+                        if (art_idx >= m_shm->num_artifacts) break;
+
+                        ArtifactUIState state = getArtifactState(art_idx);
+                        int weapon_id = m_shm->artifacts[art_idx].getWeaponId();
+
+                        if (state == ArtifactUIState::HELD_BY_ME)
+                        {
+                            std::cout << "[Renderer] G+" << art_idx << " -> RELEASE_ARTIFACT\n";
+                            fireCallback(Action::RELEASE_ARTIFACT, -1, weapon_id);
+                        }
+                        else if (state == ArtifactUIState::AVAILABLE || state == ArtifactUIState::WAITING)
+                        {
+                            std::cout << "[Renderer] G+" << art_idx << " -> GET_ARTIFACT  weapon_id=" << weapon_id << "\n";
+                            fireCallback(Action::GET_ARTIFACT, -1, weapon_id);
+                        }
+                        else
+                        {
+                            std::cout << "[Renderer] G+" << art_idx << " ignored — artifact state: "
+                                    << (int)state << "\n";
+                        }
+                        break;
+                    }
+
                     case sf::Keyboard::Down:
                     {
                         int limit = (m_sidebarMode == SidebarMode::BACKPACK)
@@ -606,14 +755,14 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
                             : (int)getActivePlayerInventory().size();
                         if (limit > 0)
                             m_selectedWeapon = (m_selectedWeapon + 1) % limit;
-                        std::cout << "[Renderer] Selected weapon → "
+                        std::cout << "[Renderer] Selected weapon -> "
                                   << m_selectedWeapon << "\n";
                         break;
                     }
 
                     // ── Actions ───────────────────────────────────────────────
                     case sf::Keyboard::Space:
-                        std::cout << "[Renderer] SPACE → STRIKE  enemy="
+                        std::cout << "[Renderer] SPACE ->STRIKE  enemy="
                                   << m_selectedEnemy << "\n";
                         fireCallback(Action::STRIKE, m_selectedEnemy, -1);
                         break;
@@ -627,7 +776,7 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
                             && m_selectedWeapon < (int)inv.size())
                         {
                             int wid = inv[m_selectedWeapon].getWeaponId();
-                            std::cout << "[Renderer] W → USE_WEAPON  enemy="
+                            std::cout << "[Renderer] W -> USE_WEAPON  enemy="
                                       << m_selectedEnemy
                                       << "  weaponId=" << wid << "\n";
                             fireCallback(Action::USE_WEAPON, m_selectedEnemy, wid);
@@ -638,7 +787,7 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
                     }
 
                     case sf::Keyboard::E:
-                        std::cout << "[Renderer] E → EXHAUST  enemy="
+                        std::cout << "[Renderer] E -> EXHAUST  enemy="
                                   << m_selectedEnemy << "\n";
                         fireCallback(Action::EXHAUST, m_selectedEnemy, -1);
                         break;
@@ -646,7 +795,7 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
                     {
                         if (isShmMode() && m_shm->is_weapon_dropped)
                         {
-                            std::cout << "[Renderer] P → PICKUP\n";
+                            std::cout << "[Renderer] P -> PICKUP\n";
                             fireCallback(Action::PICKUP, -1, -1);
                         }
                         else
@@ -656,7 +805,7 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
 
 
                     case sf::Keyboard::H:
-                        std::cout << "[Renderer] H → HEAL\n";
+                        std::cout << "[Renderer] H -> HEAL\n";
                         fireCallback(Action::HEAL, -1, -1);
                         break;
 
@@ -677,7 +826,7 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
 
 
                     case sf::Keyboard::Escape:
-                        std::cout << "[Renderer] ESC → SKIP\n";
+                        std::cout << "[Renderer] ESC -> SKIP\n";
                         fireCallback(Action::SKIP, -1, -1);
                         break;
 
@@ -796,8 +945,9 @@ void drawAll(float dt)
 
     // ── map overlays (drawn ON TOP of map, UNDER sidebar) ─────────────────
     drawTurnBanner();           // top of map
-    drawDroppedWeaponBanner();  // bottom of map  ← MUST be here, not after HUD
+    drawDroppedWeaponBanner();  // bottom of map   MUST be here, not after HUD
     drawHUD();                  // very bottom strip
+    drawArtifactBanners(); 
 
     // ── sidebar ───────────────────────────────────────────────────────────
     drawSidebarBg();
@@ -1273,7 +1423,7 @@ void drawDroppedWeaponBanner()
     drawText(
         "DROPPED: " + name
         + "  [DMG " + std::to_string(dmg) + "]"
-        + "  →  Press P to PICKUP  (or enemy steals it!)",
+        + "  -> Press P to PICKUP  (or enemy steals it!)",
         textX, BANNER_Y + 7.f,
         FONT_XS, sf::Color(255, 215, 50, 255)
     );
