@@ -130,29 +130,55 @@ static Weapon generateRandomWeapon(int& out_id) {
 static void handle_enemy_death(SharedMemoryBlock* shared_block, int target_id) {
     release_artifact_from_enemy(shared_block, target_id);
     shared_block->state.enemies_defeated++;
-    std::cout << "[ARBITER] Enemy " << target_id << " defeated! Total: " << shared_block->state.enemies_defeated << "/10\n";
+    std::cout << "[ARBITER] Enemy " << target_id
+              << " defeated! Total: "
+              << shared_block->state.enemies_defeated << "/10\n";
 
     int drop_roll = rand() % 100;
 
-    // 30% Chance to introduce the Eclipse Relic
-    if (drop_roll < 10 && !shared_block->state.artifacts[2].isAvailable() && !shared_block->state.artifacts[2].isHeld()) {
+    // ── Eclipse Relic: 10% chance, only if not yet introduced ────────────
+    if (drop_roll < 10
+        && !shared_block->state.artifacts[2].isAvailable()
+        && !shared_block->state.artifacts[2].isHeld())
+    {
         std::cout << "\n[ARBITER] *** A blinding light bursts from the fallen enemy! ***\n";
-        std::cout << "[ARBITER] *** The ECLIPSE RELIC has been introduced! (Use 'g 2' to lock it) ***\n\n";
-
-        pthread_mutex_lock(&shared_block->resource_table_mutex); // <-- ADDED LOCK
+        std::cout << "[ARBITER] *** The ECLIPSE RELIC has been introduced! ***\n\n";
+        pthread_mutex_lock(&shared_block->resource_table_mutex);
         shared_block->state.artifacts[2].introduce();
-        pthread_mutex_unlock(&shared_block->resource_table_mutex); // <-- ADDED UNLOCK
+        pthread_mutex_unlock(&shared_block->resource_table_mutex);
+        return;   // ← relic introduction counts as the drop event, done
     }
 
-    // 40% Chance to drop a standard weapon (only if the ground is clear)
-    else if (drop_roll >= 10 && drop_roll < 80 && !shared_block->state.is_weapon_dropped) {
-        int w_id;
-        shared_block->state.dropped_weapon = generateRandomWeapon(w_id);
-        shared_block->state.is_weapon_dropped = true;
-        std::cout << "\n[ARBITER] Enemy dropped: " << shared_block->state.dropped_weapon.getName() << "!\n";
-        std::cout << "[ARBITER] (Use PICKUP to claim it, or an enemy will steal it!)\n\n";
+    // ── Weapon drop: 60% chance ───────────────────────────────────────────
+    // Roll independently — don't let "ground already has weapon" silently
+    // swallow the roll. Instead, tell the player why nothing dropped.
+    if (drop_roll >= 10 && drop_roll < 70)
+    {
+        if (shared_block->state.is_weapon_dropped)
+        {
+            std::cout << "[ARBITER] Enemy " << target_id
+                      << " would have dropped a weapon, but the ground"
+                      << " is already occupied!\n";
+        }
+        else
+        {
+            int w_id;
+            shared_block->state.dropped_weapon      = generateRandomWeapon(w_id);
+            shared_block->state.is_weapon_dropped   = true;
+            shared_block->state.dropped_by_enemy_id = target_id;
+
+            std::cout << "\n[ARBITER] Enemy " << target_id
+                      << " dropped: "
+                      << shared_block->state.dropped_weapon.getName() << "!\n";
+            std::cout << "[ARBITER] (Press P to PICKUP, or an enemy will steal it!)\n\n";
+        }
+        return;
     }
+
+    // ── 30% chance: nothing drops ─────────────────────────────────────────
+    std::cout << "[ARBITER] Enemy " << target_id << " dropped nothing.\n";
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ARBITER KERNEL CLASS
@@ -334,14 +360,17 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
     case Action::PICKUP: {
         if (shared_block->state.is_weapon_dropped) {
             bool success = shared_block->state.players[attacker_id].pickupWeapon(shared_block->state.dropped_weapon);
+
             if (success) {
                 std::cout << "[ARBITER] Player " << attacker_id << " looted the " << shared_block->state.dropped_weapon.getName() << "!\n";
                 shared_block->state.is_weapon_dropped = false;
+                shared_block->state.dropped_by_enemy_id = -1;
             } else {
                 std::cout << "[ARBITER] Player " << attacker_id << " tried to pick it up, but inventory swapping failed!\n";
             }
         } else {
             std::cout << "[ARBITER] There is no weapon on the ground to pick up.\n";
+            shared_block->state.dropped_by_enemy_id = -1;
         }
         shared_block->state.players[attacker_id].ResetStamina();
         break;
@@ -504,6 +533,8 @@ void handle_enemy_action(const ActionRequest& request, SharedMemoryBlock* shared
             std::cout << "[ARBITER] Enemy " << attacker_id << " snatched the dropped weapon on its turn!\n";
         }
         shared_block->state.is_weapon_dropped = false;
+        shared_block->state.dropped_by_enemy_id = -1;
+
     }
 
     switch (request.action_type) {
@@ -648,7 +679,7 @@ bool need_more_enemies(const SharedMemoryBlock* shared_block) {
 }
 
 int main(int argc, char* argv[]) {
-    unsigned int seed = std::hash<std::string>{}("24I0607");
+    unsigned int seed = std::hash<std::string>{}("24I0805");
     srand(seed);
     pthread_t stamina_accumalator, deadlock_detector;
 
@@ -819,6 +850,7 @@ int main(int argc, char* argv[]) {
                 pthread_cond_broadcast(&shared_block->turn_condition);
                 shared_block->state.hassublevelended = false;
                 std::cout << "[ARBITER] HIP rendering complete. Resuming combat!\n";
+                usleep(50000);  
             }
             shared_block->state.turn_count++;
         }

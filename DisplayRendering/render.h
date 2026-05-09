@@ -51,17 +51,18 @@ constexpr float PAD   = 8.f;
 constexpr float SEC_ACTIVE_Y = 0.f;
 constexpr float SEC_ACTIVE_H = 160.f;   // was 290 — now compact
 
-// Log — smaller
-constexpr float LOG_Y       = SEC_ACTIVE_Y + SEC_ACTIVE_H + 2.f;
-constexpr float LOG_H       = 72.f;     // was 120
-constexpr float LOG_PREVIEW = 3;
+// ── Log — BIGGER now: was 72, now 140 ────────────────────────────────────────
+constexpr float LOG_Y        = SEC_ACTIVE_Y + SEC_ACTIVE_H + 2.f;  // 162
+constexpr float LOG_H        = 140.f;    //  was 72 — now shows ~5 lines comfortably
+constexpr int   LOG_PREVIEW  = 5;        // was 3 — matches the taller box
 // Tab buttons
 constexpr float BTN_Y = LOG_Y + LOG_H + 2.f;
 constexpr float BTN_H = 26.f;
 constexpr float BTN_W = (SB_W - PAD * 2 - 4.f) / 3.f;
 // Panel — gets the rest of the space
-constexpr float PANEL_Y = BTN_Y + BTN_H + 2.f;
-constexpr float PANEL_H = SB_H - PANEL_Y;
+
+constexpr float PANEL_Y = BTN_Y + BTN_H + 2.f;  // 332
+constexpr float PANEL_H = SB_H - PANEL_Y;        // 468
 
 // Enemy card sizing — dynamic, fits 4-9
 constexpr float ENEMY_CARD_H = 70.f;
@@ -122,11 +123,12 @@ Renderer(SharedMemoryBlock* block, Map* map)
     , m_shm(block ? &block->state : nullptr)
     , m_map(map)
     , m_sidebarMode(SidebarMode::ENEMIES)
+    , m_lastSublevel(1)    //  ADD
 {
-    m_parentPid = getppid();   // ← ADD THIS
+    m_parentPid = getppid();
     pthread_mutex_init(&m_stopMutex, nullptr);
-    std::cout << "[Renderer] Created in shm mode\n";
 }
+
 
 // Constructor B (local/test mode)
 Renderer(std::vector<Player*> players, std::vector<Character*> enemies, Map* map)
@@ -135,7 +137,7 @@ Renderer(std::vector<Player*> players, std::vector<Character*> enemies, Map* map
     , m_map(map)
     , m_sidebarMode(SidebarMode::ENEMIES)
 {
-    m_parentPid = getppid();   // ← ADD THIS
+    m_parentPid = getppid();   //  ADD THIS
     pthread_mutex_init(&m_stopMutex, nullptr);
     std::cout << "[Renderer] Created in local mode\n";
 }
@@ -265,6 +267,36 @@ private:
 
         // ── Add to private members ────────────────────────────────────────────────────
         bool m_gHeld = false;
+    // ── Add to private members ────────────────────────────────────────────────
+    int m_lastSublevel = 1;
+
+    // ─────────────────────────────────────────────────────────────────────────
+//  Floating damage numbers
+// ─────────────────────────────────────────────────────────────────────────
+struct DmgPopup
+{
+    std::string text;
+    float       x, y;
+    float       velY;
+    float       life;
+    float       maxLife;
+    sf::Color   col;
+    unsigned    fontSize;  
+};
+
+std::vector<DmgPopup> m_popups;
+
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Combat highlight rings
+    // ─────────────────────────────────────────────────────────────────────────
+
+
+    // HP snapshot — used to detect damage between frames
+    int m_prevPlayerHp[4]  = { -1, -1, -1, -1 };
+    int m_prevEnemyHp[9]   = { -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+
+
 
 
 
@@ -324,15 +356,21 @@ void loadEnemyRenderers()
     int count = m_shm->num_active_enemies;
     if (count <= 0) return;
 
+    // ── Reset ALL slots first, not just the new count ─────────────────────
+    // This clears out stale renderers from the previous wave
+    for (int i = 0; i < 9; i++)
+        m_enemyRenderers[i] = EnemyRenderer{};
+
     for (int i = 0; i < count; i++)
     {
-        m_enemyRenderers[i] = EnemyRenderer{};          // reset first
         m_enemyRenderers[i].init(m_shm->enemies[i]);
     }
 
     m_enemiesLoaded = true;
-    std::cout << "[RENDERER] Loaded " << count << " enemy renderers\n";
+    std::cout << "[Renderer] Loaded " << count << " enemy renderers"
+              << " (sublevel " << m_shm->sublevel << ")\n";
 }
+
 
 
 // Call every frame inside drawAll(), before drawEnemySection()
@@ -867,46 +905,57 @@ void drawArtifactBanners()
                 m_logExpanded = !m_logExpanded;
         }
     }
-    void drawDeadEnemyMarkers()
+void drawDeadEnemyMarkers()
+{
+    if (!isShmMode()) return;
+
+    int   count      = m_shm->num_active_enemies;
+    int   dropperIdx = m_shm->dropped_by_enemy_id;   // -1 if no drop, or already claimed
+    bool  hasWeapon  = m_shm->is_weapon_dropped;
+
+    for (int i = 0; i < count; i++)
     {
-        if (!isShmMode()) return;
-        int count = m_shm->num_active_enemies;
+        const Enemy& e = m_shm->enemies[i];
+        if (e.isAlive()) continue;
 
-        for (int i = 0; i < count; i++)
+        float ex = e.getXPos();
+        float ey = e.getYPos();
+
+        // ── X marker at every corpse ──────────────────────────────────────
+        drawRect(ex - 12.f, ey - 12.f, 24.f, 24.f,
+                 sf::Color(60, 20, 20, 160),
+                 sf::Color(120, 40, 40, 200), 1.f);
+        drawText("X", ex - 5.f, ey - 10.f, FONT_MD,
+                 sf::Color(180, 60, 60, 200));
+
+        // ── Weapon icon ONLY at the specific enemy who dropped it ─────────
+        if (hasWeapon && i == dropperIdx)
         {
-            const Enemy& e = m_shm->enemies[i];
-            if (e.isAlive()) continue;
+            const std::string& wname = m_shm->dropped_weapon.getName();
 
-            float ex = e.getXPos();
-            float ey = e.getYPos();
+            // Glowing outline box
+            drawRect(ex - 18.f, ey + 12.f, 36.f, 36.f,
+                     sf::Color(80, 60, 0, 180),
+                     sf::Color(255, 180, 0, 200), 1.f);
 
-            // Grey skull-ish X marker at death position
-            drawRect(ex - 12.f, ey - 12.f, 24.f, 24.f,
-                    sf::Color(60, 20, 20, 160),
-                    sf::Color(120, 40, 40, 200), 1.f);
-            drawText("X", ex - 5.f, ey - 10.f, FONT_MD,
-                    sf::Color(180, 60, 60, 200));
-
-            // If THIS was the enemy that dropped a weapon, show the weapon icon
-            if (m_shm->is_weapon_dropped)
+            if (m_weaponTextures.count(wname))
             {
-                const std::string& wname = m_shm->dropped_weapon.getName();
-                if (m_weaponTextures.count(wname))
-                {
-                    sf::Sprite drop(m_weaponTextures.at(wname));
-                    drop.setPosition(ex - 16.f, ey + 14.f);
-                    drop.setScale(32.f / drop.getTexture()->getSize().x,
-                                32.f / drop.getTexture()->getSize().y);
-
-                    // Glowing outline box behind icon
-                    drawRect(ex - 18.f, ey + 12.f, 36.f, 36.f,
-                            sf::Color(80, 60, 0, 180),
-                            sf::Color(255, 180, 0, 200), 1.f);
-                    m_window.draw(drop);
-                }
+                sf::Sprite drop(m_weaponTextures.at(wname));
+                drop.setPosition(ex - 16.f, ey + 14.f);
+                drop.setScale(32.f / drop.getTexture()->getSize().x,
+                              32.f / drop.getTexture()->getSize().y);
+                m_window.draw(drop);
+            }
+            else
+            {
+                // Fallback: show first letter if texture missing
+                drawText(std::string(1, wname[0]),
+                         ex - 6.f, ey + 18.f, FONT_MD, Colour::TxtName);
             }
         }
     }
+}
+
 
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -935,13 +984,48 @@ void drawAll(float dt)
         }
     }
 
+
+    if (isShmMode() && m_shm->sublevel != m_lastSublevel)
+    {
+        std::cout << "[Renderer] Sublevel changed "
+                  << m_lastSublevel << " -> " << m_shm->sublevel
+                  << " — reloading enemy renderers + advancing map\n";
+
+        // Wait until arbiter has actually populated the new enemies
+        // (num_active_enemies will be > 0 and enemies[0] will be alive)
+        bool newEnemiesReady = false;
+        for (int i = 0; i < m_shm->num_active_enemies; ++i)
+        {
+            if (m_shm->enemies[i].isAlive())
+            {
+                newEnemiesReady = true;
+                break;
+            }
+        }
+
+        if (newEnemiesReady)
+        {
+            loadEnemyRenderers();   // reload sprites for new enemy types
+            advanceMapScreen();     // switch map background
+            m_selectedEnemy  = 0;  // reset cursor to first enemy
+            m_lastSublevel   = m_shm->sublevel;
+        }
+    }
+
     // ── map + characters ──────────────────────────────────────────────────
     if (m_map) m_map->draw(m_window);
     else        std::cerr << "[Renderer] Map pointer is null\n";
 
+        // 1. Detect HP changes FIRST — spawns popups/highlights for this frame
+    detectAndSpawnCombatFX(dt);
+
+    // 2. Then draw players/enemies on top of highlights, so they appear under the ring
     drawPlayers();
     updateAndDrawEnemies(m_window, dt);
     drawDeadEnemyMarkers(); 
+
+    //3. Then like the popups
+    updateAndDrawPopups(dt);
 
     // ── map overlays (drawn ON TOP of map, UNDER sidebar) ─────────────────
     drawTurnBanner();           // top of map
@@ -977,40 +1061,158 @@ void drawAll(float dt)
 }
 
 
-std::vector<Weapon> getActivePlayerInventory() const
-    {
-        std::vector<Weapon> out;
-        int pi = m_activeIdx;
+    // Call this whenever you want a number to fly up at (wx, wy)
+void spawnDmgPopup(float wx, float wy, int amount, bool isHeal, bool isBig = false)
+{
+    DmgPopup p;
+    p.text     = isHeal
+                 ? ("+" + std::to_string(amount))
+                 : ("-" + std::to_string(amount));
+    p.x        = wx ;
+    p.y        = wy - 40.f;        // spawn well above the sprite head
+    p.velY     = -52.f;            // floats upward px/sec
+    p.life     = 2.2f;
+    p.maxLife  = p.life;
 
-        if (isShmMode())
+    // Colour: heal=green, big hit=bright red, normal=dark crimson
+    p.col      = isHeal  ? sf::Color( 80, 220,  90, 255) :  sf::Color(255,  45,  45, 255) ;  // bright red
+                       
+
+
+    p.fontSize = 32;
+
+    m_popups.push_back(p);
+}
+
+void detectAndSpawnCombatFX(float dt)
+{
+    if (!isShmMode()) return;
+
+    // ── Players ───────────────────────────────────────────────────────────
+    int numP = m_shm->num_active_players;
+    for (int i = 0; i < numP; i++)
+    {
+        const Player& p   = m_shm->players[i];
+        int           cur = p.getHp();
+        int           prv = m_prevPlayerHp[i];
+
+        if (prv == -1) { m_prevPlayerHp[i] = cur; continue; }
+
+        if (cur < prv)
         {
-            if (pi < 0 || pi >= m_shm->num_active_players) return out;
-            for (const auto& pair :
-                 m_shm->players[pi].getInventory().getEquippedWeapons())
+            int  dmg = prv - cur;
+            bool big = (dmg >= prv / 2);
+            // Centre horizontally on sprite, spawn at top of sprite
+            spawnDmgPopup(p.getXPos() + p.getScaleX() * 32.f,
+                          p.getYPos(),
+                          dmg, false, big);
+        }
+        else if (cur > prv)
+        {
+            spawnDmgPopup(p.getXPos() + p.getScaleX() * 32.f,
+                          p.getYPos(),
+                          cur - prv, true);
+        }
+        m_prevPlayerHp[i] = cur;
+    }
+
+    // ── Enemies ───────────────────────────────────────────────────────────
+    int numE = m_shm->num_active_enemies;
+    for (int i = 0; i < numE; i++)
+    {
+        const Enemy& e   = m_shm->enemies[i];
+        int          cur = e.getHp();
+        int          prv = m_prevEnemyHp[i];
+
+        if (prv == -1) { m_prevEnemyHp[i] = cur; continue; }
+
+        if (cur < prv && prv > 0)
+        {
+            int  dmg  = prv - cur;
+            bool kill = (cur <= 0);
+            bool big  = kill || (dmg >= prv / 2);
+            // Enemy sprites tend to be wider — offset by scale
+            spawnDmgPopup(e.getXPos() + e.getScaleX() * 30.f,
+                          e.getYPos(),
+                          dmg, false, big);
+        }
+        m_prevEnemyHp[i] = cur;
+    }
+}
+
+
+
+
+    std::vector<Weapon> getActivePlayerInventory() const
+        {
+            std::vector<Weapon> out;
+            int pi = m_activeIdx;
+
+            if (isShmMode())
+            {
+                if (pi < 0 || pi >= m_shm->num_active_players) return out;
+                for (const auto& pair :
+                    m_shm->players[pi].getInventory().getEquippedWeapons())
+                    out.push_back(pair.second);
+                return out;
+            }
+            if (pi < 0 || pi >= (int)m_localPlayers.size()) return out;
+            Player* p = m_localPlayers[pi];
+            if (!p) return out;
+            for (const auto& pair : p->getInventory().getEquippedWeapons())
                 out.push_back(pair.second);
             return out;
         }
-        if (pi < 0 || pi >= (int)m_localPlayers.size()) return out;
-        Player* p = m_localPlayers[pi];
-        if (!p) return out;
-        for (const auto& pair : p->getInventory().getEquippedWeapons())
-            out.push_back(pair.second);
-        return out;
-    }
 
-    std::vector<Weapon> getActivePlayerBackpack() const
-    {
-        int pi = m_activeIdx;
-        if (isShmMode())
+        std::vector<Weapon> getActivePlayerBackpack() const
         {
-            if (pi < 0 || pi >= m_shm->num_active_players) return {};
-            return m_shm->players[pi].getBackpack().getWeapons();
+            int pi = m_activeIdx;
+            if (isShmMode())
+            {
+                if (pi < 0 || pi >= m_shm->num_active_players) return {};
+                return m_shm->players[pi].getBackpack().getWeapons();
+            }
+            if (pi < 0 || pi >= (int)m_localPlayers.size()) return {};
+            Player* p = m_localPlayers[pi];
+            if (!p) return {};
+            return p->getBackpack().getWeapons();
         }
-        if (pi < 0 || pi >= (int)m_localPlayers.size()) return {};
-        Player* p = m_localPlayers[pi];
-        if (!p) return {};
-        return p->getBackpack().getWeapons();
+
+
+
+void updateAndDrawPopups(float dt)
+{
+    for (auto& p : m_popups)
+    {
+        p.y    += p.velY * dt;
+        p.life -= dt;
     }
+    m_popups.erase(
+        std::remove_if(m_popups.begin(), m_popups.end(),
+                       [](const DmgPopup& p){ return p.life <= 0.f; }),
+        m_popups.end()
+    );
+
+    for (const auto& p : m_popups)
+    {
+        float     t = p.life / p.maxLife;                    // 1.0 → 0.0
+        sf::Uint8 a = (sf::Uint8)(255.f * t);                // main alpha
+        sf::Uint8 s = (sf::Uint8)(255.f * t * 0.55f);        // shadow alpha
+
+        // Drop shadow — 2px offset, darker
+        drawText(p.text,
+                 p.x + 2.f, p.y + 2.f,
+                 p.fontSize,
+                 sf::Color(0, 0, 0, s));
+
+        // Main number
+        drawText(p.text,
+                 p.x, p.y,
+                 p.fontSize,
+                 sf::Color(p.col.r, p.col.g, p.col.b, a));
+    }
+}
+
 
 
 
@@ -1215,21 +1417,23 @@ void drawHUD()
     void drawActionLog()
     {
         drawRect(SB_X, LOG_Y, SB_W, LOG_H,
-                 sf::Color(18, 18, 35), Colour::Divider, 1.f);
+                sf::Color(18, 18, 35), Colour::Divider, 1.f);
+
+        // ── Header row ────────────────────────────────────────────────────────
         drawText("ACTION LOG", SB_X + PAD, LOG_Y + 6.f, FONT_XS, Colour::TxtMuted);
 
         // Expand/collapse button
         float btnX = SB_X + SB_W - PAD - 24.f;
         float btnY = LOG_Y + 4.f;
         drawRect(btnX, btnY, 22.f, 18.f,
-                 Colour::BtnInactive, Colour::BtnBorder, 1.f);
+                Colour::BtnInactive, Colour::BtnBorder, 1.f);
         drawText(m_logExpanded ? "^" : "v",
-                 btnX + 6.f, btnY + 1.f, FONT_XS, Colour::TxtName);
+                btnX + 6.f, btnY + 1.f, FONT_XS, Colour::TxtName);
 
         if (!m_block)
         {
             drawText("(local mode — no log)",
-                     SB_X + PAD, LOG_Y + 26.f, FONT_XS, Colour::TxtMuted);
+                    SB_X + PAD, LOG_Y + 26.f, FONT_XS, Colour::TxtMuted);
             return;
         }
 
@@ -1237,24 +1441,33 @@ void drawHUD()
         if (log.count == 0)
         {
             drawText("No actions yet.",
-                     SB_X + PAD, LOG_Y + 26.f, FONT_XS, Colour::TxtMuted);
+                    SB_X + PAD, LOG_Y + 26.f, FONT_XS, Colour::TxtMuted);
             return;
         }
 
-        int   start = std::max(0, log.count - (int)LOG_PREVIEW);
-        float lineY = LOG_Y + 26.f;
+        // ── Lines — fit as many as the box allows ────────────────────────────
+        constexpr float LINE_H      = 22.f;   // px per log line
+        constexpr float HEADER_H    = 26.f;   // space taken by "ACTION LOG" header
+        int   maxLines  = (int)((LOG_H - HEADER_H) / LINE_H);  // auto-fits to LOG_H
+        int   start     = std::max(0, log.count - maxLines);
+        float lineY     = LOG_Y + HEADER_H;
+
         for (int i = start; i < log.count; i++)
         {
-            int       idx = (log.head + i) % ACTION_LOG_SIZE;
-            float     t   = (float)(i - start) / (float)LOG_PREVIEW;
-            sf::Uint8 a   = (sf::Uint8)(120 + 135 * t);
-            drawText(log.messages[idx], SB_X + PAD, lineY, FONT_XS,
-                     sf::Color(210, 210, 230, a));
-            lineY += 20.f;
+            int       idx  = (log.head + i) % ACTION_LOG_SIZE;
+            int       age  = log.count - 1 - i;          // 0 = newest
+            float     t    = 1.f - (float)age / (float)std::max(1, maxLines - 1);
+            sf::Uint8 a    = (sf::Uint8)(80 + 175 * t);  // older = more faded
+
+            drawText(log.messages[idx],
+                    SB_X + PAD, lineY,
+                    FONT_XS, sf::Color(210, 210, 230, a));
+            lineY += LINE_H;
         }
 
         if (m_logExpanded) drawLogOverlay(log);
     }
+
 
     void drawLogOverlay(ActionLog& log)
     {

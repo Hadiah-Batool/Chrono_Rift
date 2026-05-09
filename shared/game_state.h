@@ -86,6 +86,7 @@ struct GameState {
 
     bool is_weapon_dropped = false;
     Weapon dropped_weapon;
+    int    dropped_by_enemy_id  = -1; 
 };
 
 // ---------------------------------------------------------------------------
