@@ -134,8 +134,8 @@ static void handle_enemy_death(SharedMemoryBlock* shared_block, int target_id) {
 
     int drop_roll = rand() % 100;
 
-    // 15% Chance to introduce the Eclipse Relic
-    if (drop_roll < 15 && !shared_block->state.artifacts[2].isAvailable() && !shared_block->state.artifacts[2].isHeld()) {
+    // 30% Chance to introduce the Eclipse Relic
+    if (drop_roll < 30 && !shared_block->state.artifacts[2].isAvailable() && !shared_block->state.artifacts[2].isHeld()) {
         std::cout << "\n[ARBITER] *** A blinding light bursts from the fallen enemy! ***\n";
         std::cout << "[ARBITER] *** The ECLIPSE RELIC has been introduced! (Use 'g 2' to lock it) ***\n\n";
 
@@ -144,8 +144,8 @@ static void handle_enemy_death(SharedMemoryBlock* shared_block, int target_id) {
         pthread_mutex_unlock(&shared_block->resource_table_mutex); // <-- ADDED UNLOCK
     }
 
-    // 35% Chance to drop a standard weapon (only if the ground is clear)
-    else if (drop_roll >= 15 && drop_roll < 50 && !shared_block->state.is_weapon_dropped) {
+    // 40% Chance to drop a standard weapon (only if the ground is clear)
+    else if (drop_roll >= 30 && drop_roll < 70 && !shared_block->state.is_weapon_dropped) {
         int w_id;
         shared_block->state.dropped_weapon = generateRandomWeapon(w_id);
         shared_block->state.is_weapon_dropped = true;
