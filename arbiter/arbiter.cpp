@@ -365,7 +365,9 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         int weapon_damage = 0;
 
         if (shared_block->state.players[attacker_id].getInventory().hasWeapon(weapon_id)) {
-            weapon_damage = shared_block->state.players[attacker_id].getInventory().getEquippedWeapons().at(weapon_id).getDamage();
+            // equipped weapons are stored as std::pair<int, Weapon>
+            // access the Weapon via .second
+            weapon_damage = shared_block->state.players[attacker_id].getInventory().getEquippedWeapons().at(weapon_id).second.getDamage();
         }
 
         shared_block->state.enemies[target_id].TakeDamage(weapon_damage);
@@ -380,12 +382,26 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         shared_block->state.players[attacker_id].ResetStamina();
         break;
     }
+
     case Action::SWAP_IN: {
-        int weapon_id = shared_block->hip_mailbox.weapon_id;
-        shared_block->state.players[attacker_id].swapInFromBackpack(weapon_id);
+        int backpack_idx = shared_block->hip_mailbox.weapon_id;  // renderer sends index
+        int bp_count = shared_block->state.players[attacker_id].getBackpack().getCount();
+
+        if (backpack_idx >= 0 && backpack_idx < bp_count)
+        {
+            shared_block->state.players[attacker_id].swapInFromBackpack(backpack_idx);
+            std::cout << "[ARBITER] Player " << attacker_id
+                    << " swapped in backpack slot " << backpack_idx << "\n";
+        }
+        else
+        {
+            std::cout << "[ARBITER] SWAP_IN ignored: invalid backpack index "
+                    << backpack_idx << " (count=" << bp_count << ")\n";
+        }
         shared_block->state.players[attacker_id].ResetStamina();
         break;
     }
+
     case Action::HEAL: {
         int heal_amount = shared_block->state.players[attacker_id].getMaxHp() / 10;
         shared_block->state.players[attacker_id].RegainHealth(heal_amount);

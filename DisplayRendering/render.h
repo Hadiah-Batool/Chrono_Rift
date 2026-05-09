@@ -495,12 +495,11 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
                 std::cerr << "[Renderer] Missing sprite: " << e.path << "\n";
         }
     }
-
+// ─────────────────────────────────────────────────────────────────────────
+    //  fireCallback
+    //  FIX: validate it's actually this player's turn before firing
     // ─────────────────────────────────────────────────────────────────────────
-    //  fireCallback — guards against enemy-turn keypresses
-    // ─────────────────────────────────────────────────────────────────────────
-
-void fireCallback(Action action, int target, int weapon)
+    void fireCallback(Action action, int target, int weapon)
     {
         if (isShmMode())
         {
@@ -523,6 +522,8 @@ void fireCallback(Action action, int target, int weapon)
         else
             std::cerr << "[Renderer] WARNING: no action callback set!\n";
     }
+
+
 
     // ─────────────────────────────────────────────────────────────────────────
     //  handleEvents
