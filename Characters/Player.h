@@ -227,31 +227,41 @@ public:
         switch (playerType)
         {
             case PlayerType::CHRONO:
-                inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::IRON_HALBERD,   "Iron Halberd",   7, 55));
+{                inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::IRON_HALBERD,   "Iron Halberd",   7, 55));
                 inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::THUNDERSTAFF,   "Thunderstaff",   6, 50));
                 inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::OBSIDIAN_AXE,   "Obsidian Axe",   5, 45));
                 inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::SPLINTER_STICK, "Splinter Stick", 2, 12));
+                Weapon w(generateWeaponId(), WeaponType::SPLINTER_STICK, "Splinter Stick", 2, 12);
+                backpack.addWeapon(w);
+
                 break;
+            }
             case PlayerType::FROG:
-                inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::FROSTBOW,       "Frostbow",       6, 48));
+{                inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::FROSTBOW,       "Frostbow",       6, 48));
                 inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::THUNDERSTAFF,   "Thunderstaff",   6, 50));
                 inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::VENOM_DAGGER,   "Venom Dagger",   4, 30));
                 inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::SPLINTER_STICK, "Splinter Stick", 2, 12));
-                inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::SPLINTER_STICK, "Splinter Stick", 2, 12));
-                break;
+                Weapon w1(generateWeaponId(), WeaponType::SPLINTER_STICK, "Splinter Stick", 2, 12);
+                backpack.addWeapon(w1);
+                break;}
             case PlayerType::MARLE:
-                inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::IRON_HALBERD,   "Iron Halberd",   7, 55));
+{                inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::IRON_HALBERD,   "Iron Halberd",   7, 55));
                 inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::OBSIDIAN_AXE,   "Obsidian Axe",   5, 45));
                 inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::VENOM_DAGGER,   "Venom Dagger",   4, 30));
                 inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::SPLINTER_STICK, "Splinter Stick", 2, 12));
-                inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::SPLINTER_STICK, "Splinter Stick", 2, 12));
-                break;
+                Weapon w2(generateWeaponId(), WeaponType::VENOM_DAGGER,   "Venom Dagger",   4, 30);
+                backpack.addWeapon(w2);
+                break;}
             case PlayerType::MAGUS:
-                inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::IRON_HALBERD,   "Iron Halberd",   7, 55));
+{                inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::IRON_HALBERD,   "Iron Halberd",   7, 55));
                 inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::FROSTBOW,       "Frostbow",       6, 48));
                 inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::OBSIDIAN_AXE,   "Obsidian Axe",   5, 45));
                 inventory.insertWeapon(Weapon(generateWeaponId(), WeaponType::SPLINTER_STICK, "Splinter Stick", 2, 12));
-                break;
+                Weapon w3(generateWeaponId(), WeaponType::SPLINTER_STICK, "Splinter Stick", 2, 12);
+                backpack.addWeapon(w3);
+                break;}
+
+
             default: break;
         }
     }

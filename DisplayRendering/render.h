@@ -13,6 +13,9 @@
 #include "Map.h"
 #include "../shared/shared_types.h"
 #include "EnemyRenderer.h"
+#include <signal.h>
+#include <unistd.h>   // for getppid()
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ACTION CONSTANTS
@@ -113,29 +116,30 @@ class Renderer
 public:
     enum class SidebarMode { ENEMIES, INVENTORY, BACKPACK };
 
-    // ── Constructor A: HIP / shm mode (production) ───────────────────────────
-     Renderer(SharedMemoryBlock* block, Map* map)
-        : m_block(block)
-        , m_shm(block ? &block->state : nullptr)
-        , m_map(map)
-        , m_sidebarMode(SidebarMode::ENEMIES)
-    {
-        pthread_mutex_init(&m_stopMutex, nullptr);
-        std::cout << "[Renderer] Created in shm mode\n";
-    }
+// Constructor A (SHM mode)
+Renderer(SharedMemoryBlock* block, Map* map)
+    : m_block(block)
+    , m_shm(block ? &block->state : nullptr)
+    , m_map(map)
+    , m_sidebarMode(SidebarMode::ENEMIES)
+{
+    m_parentPid = getppid();   // ← ADD THIS
+    pthread_mutex_init(&m_stopMutex, nullptr);
+    std::cout << "[Renderer] Created in shm mode\n";
+}
 
-    // ── Constructor B: local pointer mode (unit testing only) ────────────────
-    Renderer(std::vector<Player*>    players,
-             std::vector<Character*> enemies,
-             Map*                    map)
-        : m_localPlayers(std::move(players))
-        , m_localEnemies(std::move(enemies))
-        , m_map(map)
-        , m_sidebarMode(SidebarMode::ENEMIES)
-    {
-        pthread_mutex_init(&m_stopMutex, nullptr);
-        std::cout << "[Renderer] Created in local mode\n";
-    }
+// Constructor B (local/test mode)
+Renderer(std::vector<Player*> players, std::vector<Character*> enemies, Map* map)
+    : m_localPlayers(std::move(players))
+    , m_localEnemies(std::move(enemies))
+    , m_map(map)
+    , m_sidebarMode(SidebarMode::ENEMIES)
+{
+    m_parentPid = getppid();   // ← ADD THIS
+    pthread_mutex_init(&m_stopMutex, nullptr);
+    std::cout << "[Renderer] Created in local mode\n";
+}
+
 
     ~Renderer()
     {
@@ -249,9 +253,16 @@ private:
 
     // Mouse click edge detection
     bool m_prevMouseDown = false;
+    pid_t m_parentPid = 0;
+
 
     // Log overlay toggle
     bool m_logExpanded = false;
+
+        // ── Add to private members ────────────────────────────────────────────────
+    float       m_swapFlashTimer = 0.f;
+    std::string m_swapFlashMsg   = "";
+
 
 
     // Callback wired by hip.cpp
@@ -536,12 +547,16 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
         sf::Event e{};
         while (m_window.pollEvent(e))
         {
-            if (e.type == sf::Event::Closed)
-            {
-                std::cout << "[Renderer] Window close requested\n";
-                requestStop();
-                m_window.close();
-            }
+        if (e.type == sf::Event::Closed)
+        {
+            std::cout << "[Renderer] Window close requested — sending SIGTERM to parent "
+                    << m_parentPid << "\n";
+            requestStop();
+            m_window.close();
+            if (m_parentPid > 0)
+                kill(m_parentPid, SIGTERM);
+        }
+
 
             if (e.type == sf::Event::KeyPressed)
             {
@@ -627,6 +642,18 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
                                   << m_selectedEnemy << "\n";
                         fireCallback(Action::EXHAUST, m_selectedEnemy, -1);
                         break;
+                    case sf::Keyboard::P:
+                    {
+                        if (isShmMode() && m_shm->is_weapon_dropped)
+                        {
+                            std::cout << "[Renderer] P → PICKUP\n";
+                            fireCallback(Action::PICKUP, -1, -1);
+                        }
+                        else
+                            std::cout << "[Renderer] P ignored — nothing on the ground\n";
+                        break;
+                    }
+
 
                     case sf::Keyboard::H:
                         std::cout << "[Renderer] H → HEAL\n";
@@ -635,25 +662,19 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
 
                     case sf::Keyboard::Tab:
                     {
-                        // FIX: only fire in BACKPACK mode
-                        // send backpack slot index (arbiter's swapInFromBackpack takes index)
                         if (m_sidebarMode == SidebarMode::BACKPACK)
                         {
                             std::vector<Weapon> bp = getActivePlayerBackpack();
-                            if (m_selectedWeapon >= 0
-                                && m_selectedWeapon < (int)bp.size())
+                            if (m_selectedWeapon >= 0 && m_selectedWeapon < (int)bp.size())
                             {
-                                std::cout << "[Renderer] TAB → SWAP_IN  backpackSlot="
-                                          << m_selectedWeapon << "\n";
+                                m_swapFlashMsg   = "Swapped in: " + bp[m_selectedWeapon].getName();
+                                m_swapFlashTimer = 2.0f;   // show for 2 seconds
                                 fireCallback(Action::SWAP_IN, -1, m_selectedWeapon);
                             }
-                            else
-                                std::cout << "[Renderer] TAB ignored — no backpack item selected\n";
                         }
-                        else
-                            std::cout << "[Renderer] TAB ignored — switch to BACKPACK tab first\n";
                         break;
                     }
+
 
                     case sf::Keyboard::Escape:
                         std::cout << "[Renderer] ESC → SKIP\n";
@@ -697,54 +718,114 @@ void updateAndDrawEnemies(sf::RenderWindow& window, float dt)
                 m_logExpanded = !m_logExpanded;
         }
     }
+    void drawDeadEnemyMarkers()
+    {
+        if (!isShmMode()) return;
+        int count = m_shm->num_active_enemies;
+
+        for (int i = 0; i < count; i++)
+        {
+            const Enemy& e = m_shm->enemies[i];
+            if (e.isAlive()) continue;
+
+            float ex = e.getXPos();
+            float ey = e.getYPos();
+
+            // Grey skull-ish X marker at death position
+            drawRect(ex - 12.f, ey - 12.f, 24.f, 24.f,
+                    sf::Color(60, 20, 20, 160),
+                    sf::Color(120, 40, 40, 200), 1.f);
+            drawText("X", ex - 5.f, ey - 10.f, FONT_MD,
+                    sf::Color(180, 60, 60, 200));
+
+            // If THIS was the enemy that dropped a weapon, show the weapon icon
+            if (m_shm->is_weapon_dropped)
+            {
+                const std::string& wname = m_shm->dropped_weapon.getName();
+                if (m_weaponTextures.count(wname))
+                {
+                    sf::Sprite drop(m_weaponTextures.at(wname));
+                    drop.setPosition(ex - 16.f, ey + 14.f);
+                    drop.setScale(32.f / drop.getTexture()->getSize().x,
+                                32.f / drop.getTexture()->getSize().y);
+
+                    // Glowing outline box behind icon
+                    drawRect(ex - 18.f, ey + 12.f, 36.f, 36.f,
+                            sf::Color(80, 60, 0, 180),
+                            sf::Color(255, 180, 0, 200), 1.f);
+                    m_window.draw(drop);
+                }
+            }
+        }
+    }
+
 
     // ─────────────────────────────────────────────────────────────────────────
     //  drawAll — master draw call
     // ─────────────────────────────────────────────────────────────────────────
-    void drawAll(float dt)
+void drawAll(float dt)
+{
+    // ── sync SHM turn state ───────────────────────────────────────────────
+    if (isShmMode())
     {
-        if (isShmMode())
+        int  owner    = m_shm->current_turn_owner_id;
+        bool isPlayer = m_shm->is_player_turn;
+        int  numP     = m_shm->num_active_players;
+
+        if (isPlayer && owner >= 0 && owner < numP)
         {
-            int  owner    = m_shm->current_turn_owner_id;
-            bool isPlayer = m_shm->is_player_turn;
-            int  numP     = m_shm->num_active_players;
-
-            if (isPlayer && owner >= 0 && owner < numP)
-            {
-                m_activeTurnId        = owner;
-                m_activeIsPlayer      = true;
-                m_activeIdx           = owner;   // FIX: keep in sync
-                m_lastActivePlayerIdx = owner;
-            }
-            else if (!isPlayer && owner >= numP)
-            {
-                m_activeTurnId   = owner;
-                m_activeIsPlayer = false;
-                // m_activeIdx and m_lastActivePlayerIdx stay on last player
-                // so sidebar keeps showing that player's stats during enemy turn
-            }
+            m_activeTurnId        = owner;
+            m_activeIsPlayer      = true;
+            m_activeIdx           = owner;
+            m_lastActivePlayerIdx = owner;
         }
-
-        if (m_map) m_map->draw(m_window);
-        else       std::cerr << "[Renderer] Map pointer is null\n";
-
-        drawPlayers();
-        updateAndDrawEnemies(m_window, dt);
-        drawTurnBanner();
-        drawSidebarBg();
-        drawActiveSection();
-        drawToggleButtons();
-        drawActionLog();
-
-        switch (m_sidebarMode)
+        else if (!isPlayer)
         {
-            case SidebarMode::ENEMIES:   drawEnemySection();   break;
-            case SidebarMode::INVENTORY: drawInventoryPanel(); break;
-            case SidebarMode::BACKPACK:  drawBackpackPanel();  break;
+            m_activeTurnId   = owner;
+            m_activeIsPlayer = false;
         }
-
-        drawHUD();
     }
+
+    // ── map + characters ──────────────────────────────────────────────────
+    if (m_map) m_map->draw(m_window);
+    else        std::cerr << "[Renderer] Map pointer is null\n";
+
+    drawPlayers();
+    updateAndDrawEnemies(m_window, dt);
+    drawDeadEnemyMarkers(); 
+
+    // ── map overlays (drawn ON TOP of map, UNDER sidebar) ─────────────────
+    drawTurnBanner();           // top of map
+    drawDroppedWeaponBanner();  // bottom of map  ← MUST be here, not after HUD
+    drawHUD();                  // very bottom strip
+
+    // ── sidebar ───────────────────────────────────────────────────────────
+    drawSidebarBg();
+    drawActiveSection();
+    drawToggleButtons();
+    drawActionLog();
+
+    switch (m_sidebarMode)
+    {
+        case SidebarMode::ENEMIES:   drawEnemySection();   break;
+        case SidebarMode::INVENTORY: drawInventoryPanel(); break;
+        case SidebarMode::BACKPACK:  drawBackpackPanel();  break;
+    }
+
+    // ── flash overlay (on top of everything) ─────────────────────────────
+    if (m_swapFlashTimer > 0.f)
+    {
+        m_swapFlashTimer -= dt;
+        sf::Uint8 alpha = (sf::Uint8)(255 * std::min(1.f, m_swapFlashTimer / 0.5f));
+        drawRect(SB_X + PAD, PANEL_Y + 4.f,
+                 SB_W - PAD * 2, 22.f,
+                 sf::Color(20, 80, 20, alpha));
+        drawText(m_swapFlashMsg,
+                 SB_X + PAD + 4.f, PANEL_Y + 7.f,
+                 FONT_XS, sf::Color(100, 255, 100, alpha));
+    }
+}
+
 
 std::vector<Weapon> getActivePlayerInventory() const
     {
@@ -865,12 +946,22 @@ void drawHUD()
 {
     if (isShmMode() && !m_shm->is_player_turn) return;
 
-    drawRect(0.f, WIN_H - 26.f, MAP_W, 26.f, sf::Color(0, 0, 0, 180));
-    drawText(
-        "SPACE=Strike  W=Weapon  E=Exhaust  H=Heal  TAB=Swap  ESC=Skip   </>=Target  ^/v=Weapon",
-        8.f, WIN_H - 22.f, FONT_XS, Colour::TxtMuted
-    );
+    drawRect(0.f, WIN_H - 26.f, MAP_W, 26.f, sf::Color(0, 0, 0, 200));
+
+    std::string hud =
+        "SPACE=Strike  W=Weapon  E=Exhaust  H=Heal  TAB=Swap  ESC=Skip  </>=Target  ^/v=Weapon";
+
+    if (isShmMode() && m_shm->is_weapon_dropped)
+        hud += "   *** P=PICKUP ***";
+
+    sf::Color hintCol = (isShmMode() && m_shm->is_weapon_dropped)
+        ? sf::Color(255, 215, 50, 255)   // gold when pickup available
+        : Colour::TxtMuted;              // grey normally
+
+    drawText(hud, 8.f, WIN_H - 22.f, FONT_XS, hintCol);
 }
+
+
 
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1149,6 +1240,45 @@ void drawEnemySection()
         cardY += cardH + ENEMY_CARD_GAP;
     }
 }
+// ── Call this in drawAll() right after updateAndDrawEnemies() ────────────
+void drawDroppedWeaponBanner()
+{
+    if (!isShmMode()) return;
+    if (!m_shm->is_weapon_dropped) return;
+
+    const std::string& name = m_shm->dropped_weapon.getName();
+    int                dmg  = m_shm->dropped_weapon.getDamage();
+
+    // Sits ABOVE the HUD strip — HUD is at WIN_H-26, banner at WIN_H-58
+    constexpr float BANNER_H = 28.f;
+    constexpr float BANNER_Y = WIN_H - 26.f - BANNER_H - 2.f;   // = 744
+
+    // Pulsing background
+    drawRect(0.f, BANNER_Y, MAP_W, BANNER_H, sf::Color(90, 60, 0, 230));
+    drawRect(0.f, BANNER_Y, MAP_W, BANNER_H,
+             sf::Color::Transparent, sf::Color(255, 180, 0, 200), 1.f);
+
+    // Weapon icon (if loaded) — small 22x22 thumbnail left of text
+    float textX = 10.f;
+    if (m_weaponTextures.count(name))
+    {
+        sf::Sprite icon(m_weaponTextures.at(name));
+        icon.setPosition(6.f, BANNER_Y + 3.f);
+        icon.setScale(22.f / icon.getTexture()->getSize().x,
+                      22.f / icon.getTexture()->getSize().y);
+        m_window.draw(icon);
+        textX = 34.f;   // push text right of icon
+    }
+
+    drawText(
+        "DROPPED: " + name
+        + "  [DMG " + std::to_string(dmg) + "]"
+        + "  →  Press P to PICKUP  (or enemy steals it!)",
+        textX, BANNER_Y + 7.f,
+        FONT_XS, sf::Color(255, 215, 50, 255)
+    );
+}
+
 
 
     // ─────────────────────────────────────────────────────────────────────────

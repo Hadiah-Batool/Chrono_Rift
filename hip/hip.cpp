@@ -99,9 +99,11 @@ static void submitAction(HIPContext* ctx, Action action, int targetIdx, int weap
     pthread_mutex_lock(&ctx->shm->global_mutex);
     bool isPlayerTurn = ctx->shm->state.is_player_turn;
     int  active       = ctx->shm->state.current_turn_owner_id;
-    pthread_mutex_unlock(&ctx->shm->global_mutex);
 
-    if (!isPlayerTurn || active < 0 || active >= ctx->numPlayers) return;
+    if (!isPlayerTurn || active < 0 || active >= ctx->numPlayers) {
+        pthread_mutex_unlock(&ctx->shm->global_mutex);
+        return; // Early return inside the lock!
+    }
 
     ActionSlot* slot = &ctx->slots[active];
     pthread_mutex_lock(&slot->mutex);
@@ -111,6 +113,8 @@ static void submitAction(HIPContext* ctx, Action action, int targetIdx, int weap
     slot->ready     = true;
     pthread_cond_signal(&slot->cond);
     pthread_mutex_unlock(&slot->mutex);
+    
+    pthread_mutex_unlock(&ctx->shm->global_mutex); // Unlock happens AFTER submitting
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
