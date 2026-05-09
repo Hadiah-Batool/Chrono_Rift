@@ -27,18 +27,20 @@ using std::array;
 #define time_of_response 3
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ULTIMATE ABILITY SIGNAL HANDLER (Section 8)
+//  OS SIGNAL HANDLERS (Sections 8 & 10)
+// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  OS SIGNAL HANDLERS (Sections 8 & 10)
 // ─────────────────────────────────────────────────────────────────────────────
 static pid_t g_asp_pid = -1;
+static SharedMemoryBlock* g_shm_ptr = nullptr;
 
-static void handle_sigalrm(int sig) {
-    if (g_asp_pid > 0) {
-        std::cout << "\n[ARBITER] *** 10 SECONDS PASSED! ULTIMATE ABILITY ENDED! ***\n";
-        std::cout << "[ARBITER] *** Sending SIGCONT to ASP. Time resumes for enemies! ***\n> ";
-        std::cout.flush();
-        kill(g_asp_pid, SIGCONT);
-    }
-}
+// POSIX safe signal flags
+static volatile sig_atomic_t g_sigalrm_received = 0;
+static volatile sig_atomic_t g_sigterm_received = 0;
+
+static void handle_sigalrm(int sig) { g_sigalrm_received = 1; }
+static void handle_sigterm(int sig) { g_sigterm_received = 1; }
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ARTIFACT HELPER SECTION (Requires resource_table_mutex lock)
@@ -136,8 +138,12 @@ static void handle_enemy_death(SharedMemoryBlock* shared_block, int target_id) {
     if (drop_roll < 15 && !shared_block->state.artifacts[2].isAvailable() && !shared_block->state.artifacts[2].isHeld()) {
         std::cout << "\n[ARBITER] *** A blinding light bursts from the fallen enemy! ***\n";
         std::cout << "[ARBITER] *** The ECLIPSE RELIC has been introduced! (Use 'g 2' to lock it) ***\n\n";
+
+        pthread_mutex_lock(&shared_block->resource_table_mutex); // <-- ADDED LOCK
         shared_block->state.artifacts[2].introduce();
+        pthread_mutex_unlock(&shared_block->resource_table_mutex); // <-- ADDED UNLOCK
     }
+
     // 35% Chance to drop a standard weapon (only if the ground is clear)
     else if (drop_roll >= 15 && drop_roll < 50 && !shared_block->state.is_weapon_dropped) {
         int w_id;
@@ -267,13 +273,27 @@ void* stamina_recovery(void* arg){
     while(true){
         pthread_mutex_lock(&shared_block->global_mutex);
         if (shared_block->state.game_running && !shared_block->state.hassublevelended) {
+            int current_turn = shared_block->state.turn_count;
+
             for (int i = 0; i < shared_block->state.num_active_players; ++i) {
                 auto& player = shared_block->state.players[i];
-                if (player.isAlive()) player.setStamina(player.getStamina() + player.getStaminaRecoveryRate());
+                if (player.isAlive()) {
+                    if (player.isStunned() && current_turn >= player.getStunEndTem()) {
+                        player.clearStun();
+                    }
+                    int new_stamina = player.getStamina() + player.getStaminaRecoveryRate();
+                    player.setStamina(std::min(new_stamina, player.getMaxStamina()));
+                }
             }
             for (int i = 0; i < shared_block->state.num_active_enemies; ++i) {
                 auto& enemy = shared_block->state.enemies[i];
-                if (enemy.isAlive()) enemy.setStamina(enemy.getStamina() + enemy.getStaminaRecoveryRate());
+                if (enemy.isAlive()) {
+                    if (enemy.isStunned() && current_turn >= enemy.getStunEndTem()) {
+                        enemy.clearStun();
+                    }
+                    int new_stamina = enemy.getStamina() + enemy.getStaminaRecoveryRate();
+                    enemy.setStamina(std::min(new_stamina, enemy.getMaxStamina()));
+                }
             }
         }
         pthread_mutex_unlock(&shared_block->global_mutex);
@@ -365,7 +385,7 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         int weapon_damage = 0;
 
         if (shared_block->state.players[attacker_id].getInventory().hasWeapon(weapon_id)) {
-            weapon_damage = shared_block->state.players[attacker_id].getInventory().getEquippedWeapons().at(weapon_id).getDamage();
+            weapon_damage = shared_block->state.players[attacker_id].getInventory().getEquippedWeapons().at(weapon_id).second.getDamage();
         }
 
         shared_block->state.enemies[target_id].TakeDamage(weapon_damage);
@@ -456,10 +476,11 @@ void handle_enemy_action(const ActionRequest& request, SharedMemoryBlock* shared
     int attacker_id = shared_block->asp_mailbox.requesting_entity_id;
     int target_id   = shared_block->asp_mailbox.target_id;
 
-    // --- RULE: If it's an enemy's turn and a weapon is dropped, they snatch it instantly! ---
     if (shared_block->state.is_weapon_dropped) {
-        shared_block->state.enemies[attacker_id].setDemage(shared_block->state.enemies[attacker_id].getDemage() + shared_block->state.dropped_weapon.getDamage());
-        std::cout << "[ARBITER] Enemy " << attacker_id << " snatched the dropped weapon on its turn!\n";
+        if (shared_block->state.enemies[attacker_id].isAlive()) { // <-- ADDED GUARD
+            shared_block->state.enemies[attacker_id].setDemage(shared_block->state.enemies[attacker_id].getDemage() + shared_block->state.dropped_weapon.getDamage());
+            std::cout << "[ARBITER] Enemy " << attacker_id << " snatched the dropped weapon on its turn!\n";
+        }
         shared_block->state.is_weapon_dropped = false;
     }
 
@@ -609,16 +630,25 @@ int main(int argc, char* argv[]) {
     srand(seed);
     pthread_t stamina_accumalator, deadlock_detector;
 
-    // --- REGISTER THE SIGALRM HANDLER ---
+    // --- REGISTER THE SIGALRM HANDLER (Section 8) ---
     struct sigaction sa_alrm{};
     sigemptyset(&sa_alrm.sa_mask);
     sa_alrm.sa_handler = handle_sigalrm;
     sigaction(SIGALRM, &sa_alrm, nullptr);
 
+    // --- REGISTER THE SIGTERM HANDLER (Section 10) ---
+    struct sigaction sa_term{};
+    sigemptyset(&sa_term.sa_mask);
+    sa_term.sa_handler = handle_sigterm;
+    sigaction(SIGTERM, &sa_term, nullptr);
+
     const char* shm_name = "/game_state_shm";
     shm_unlink(shm_name);
     SharedMem master_shm(shm_name, sizeof(SharedMemoryBlock), true, true);
     SharedMemoryBlock* shared_block = static_cast<SharedMemoryBlock*>(master_shm.getPtr());
+
+    // Pass the pointer to the global variable so the SIGTERM handler can use it
+    g_shm_ptr = shared_block;
 
     pthread_mutexattr_t mutex_attr;
     pthread_mutexattr_init(&mutex_attr);
@@ -695,23 +725,27 @@ int main(int argc, char* argv[]) {
             pthread_cond_broadcast(&shared_block->turn_condition);
 
             if (is_player) {
-                while (!shared_block->hip_mailbox.is_ready) {
+                while (!shared_block->hip_mailbox.is_ready && shared_block->state.game_running) {
                     pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
                 }
-                handle_player_action(shared_block->hip_mailbox, shared_block);
+                if (shared_block->state.game_running) {
+                    handle_player_action(shared_block->hip_mailbox, shared_block);
+                }
             } else {
                 struct timespec ts;
                 clock_gettime(CLOCK_REALTIME, &ts);
                 ts.tv_sec += 3;
                 int res = 0;
-                while (!shared_block->asp_mailbox.is_ready && res != ETIMEDOUT) {
+                while (!shared_block->asp_mailbox.is_ready && res != ETIMEDOUT && shared_block->state.game_running) {
                     res = pthread_cond_timedwait(&shared_block->turn_condition, &shared_block->global_mutex, &ts);
                 }
-                if (res == ETIMEDOUT && !shared_block->asp_mailbox.is_ready) {
-                    shared_block->asp_mailbox.action_type = Action::SKIP;
-                    shared_block->asp_mailbox.requesting_entity_id = turn_index;
+                if (shared_block->state.game_running) {
+                    if (res == ETIMEDOUT && !shared_block->asp_mailbox.is_ready) {
+                        shared_block->asp_mailbox.action_type = Action::SKIP;
+                        shared_block->asp_mailbox.requesting_entity_id = turn_index;
+                    }
+                    handle_enemy_action(shared_block->asp_mailbox, shared_block);
                 }
-                handle_enemy_action(shared_block->asp_mailbox, shared_block);
             }
 
             shared_block->hip_mailbox.is_ready = false;
@@ -729,7 +763,7 @@ int main(int argc, char* argv[]) {
                 break;
             }
 
-            if(need_more_enemies(shared_block)) {
+            if(shared_block->state.game_running && need_more_enemies(shared_block)) {
                 shared_block->state.hassublevelended = true;
                 shared_block->state.sublevel++;
                 std::cout << "[ARBITER] Wave cleared! Loading Sublevel " << shared_block->state.sublevel << "...\n";
@@ -746,6 +780,26 @@ int main(int argc, char* argv[]) {
             shared_block->state.turn_count++;
         }
         pthread_mutex_unlock(&shared_block->global_mutex);
+
+        // --- SIGNAL DISPATCHER (Processed safely outside the interrupt) ---
+        if (g_sigalrm_received) {
+            g_sigalrm_received = 0;
+            if (g_asp_pid > 0) {
+                std::cout << "\n[ARBITER] *** 10 SECONDS PASSED! ULTIMATE ABILITY ENDED! ***\n";
+                std::cout << "[ARBITER] *** Sending SIGCONT to ASP. Time resumes for enemies! ***\n> ";
+                std::cout.flush();
+                kill(g_asp_pid, SIGCONT);
+            }
+        }
+        if (g_sigterm_received) {
+            g_sigterm_received = 0;
+            pthread_mutex_lock(&shared_block->global_mutex);
+            std::cout << "\n[ARBITER] SIGTERM received! Commencing graceful shutdown...\n";
+            shared_block->state.game_running = false;
+            pthread_cond_broadcast(&shared_block->turn_condition);
+            pthread_mutex_unlock(&shared_block->global_mutex);
+        }
+
         usleep(10000);
     }
 
