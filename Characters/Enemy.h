@@ -6,7 +6,7 @@
 #include <iostream>
 #include "Characters.h"
 // Enemy.h — top includes
-#include "../DisplayRendering/Animator.h" 
+#include "../DisplayRendering/Animator.h"
 
 enum class EnemyType
 {
@@ -188,11 +188,11 @@ public:
     {
         srand(rollFull + enemyId * 7);
 
-        maxHp      = rollLastTwo + 50 + (rand() % 151);
+        maxHp      = rollLastTwo + 50 + (rand() % 151); // Enemy HP: Last 2 digits of Roll No + random(50-200)
         Hp         = maxHp;
-        demage     = rollLastDig + 10;
-        speed      = static_cast<float>(10 + (rand() % 21));
-        MaxStamina = 150;
+        demage     = rollLastDig + 10; // Enemy Damage: Second last digit of Roll No + 10
+        speed      = static_cast<float>(10 + (rand() % 21)); // Enemy Speed: Random(10-30)
+        MaxStamina = 150; // Enemy Max Stamina: 150
         stamina    = 0;
         alive      = true;
         myTurn     = false;

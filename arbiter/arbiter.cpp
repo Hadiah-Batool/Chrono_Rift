@@ -329,7 +329,7 @@ void* stamina_recovery(void* arg){
             }
         }
         pthread_mutex_unlock(&shared_block->global_mutex);
-        usleep(100000);
+        usleep(1000000);
     }
     return nullptr;
 }
@@ -829,11 +829,13 @@ int main(int argc, char* argv[]) {
                 std::cout << "[ARBITER] 10 Enemies Slain. Objective Complete. YOU WIN!\n";
                 shared_block->state.game_running = false;
                 shared_block->state.game_result = true;
+                pthread_mutex_unlock(&shared_block->global_mutex); // <-- ADDED
                 break;
             } else if (shared_block->state.num_active_players == 0) {
                 std::cout << "[ARBITER] All players have fallen. YOU LOSE!\n";
                 shared_block->state.game_running = false;
                 shared_block->state.game_result = false;
+                pthread_mutex_unlock(&shared_block->global_mutex); // <-- ADDED
                 break;
             }
 
@@ -850,9 +852,11 @@ int main(int argc, char* argv[]) {
                 pthread_cond_broadcast(&shared_block->turn_condition);
                 shared_block->state.hassublevelended = false;
                 std::cout << "[ARBITER] HIP rendering complete. Resuming combat!\n";
-                usleep(50000);  
+                usleep(50000);
             }
             shared_block->state.turn_count++;
+            // --- FIX: CLEAR THE ACTIVE TURN SO THREADS DON'T SPAM ---
+            shared_block->state.current_turn_owner_id = -1;
         }
         pthread_mutex_unlock(&shared_block->global_mutex);
 

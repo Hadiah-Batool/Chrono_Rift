@@ -46,13 +46,13 @@ public:
         switch (playerType)
         {
             case PlayerType::CHRONO:
-                maxHp = 150; demage = 35; MaxStamina = 100; speed = 20; break;
+                maxHp = 150; demage = 35; MaxStamina = 100; speed = 4; break;
             case PlayerType::FROG:
-                maxHp = 110; demage = 32; MaxStamina = 110; speed = 23; break;
+                maxHp = 110; demage = 32; MaxStamina = 110; speed = 5; break;
             case PlayerType::MARLE:
-                maxHp = 170; demage = 37; MaxStamina =  80; speed = 14; break;
+                maxHp = 170; demage = 37; MaxStamina =  80; speed = 3; break;
             case PlayerType::MAGUS:
-                maxHp =  90; demage = 30; MaxStamina = 130; speed = 28; break;
+                maxHp =  90; demage = 30; MaxStamina = 130; speed = 5; break;
             default: break;
         }
         Hp      = maxHp;
@@ -64,11 +64,11 @@ public:
     {
         srand(rollFull);
 
-        maxHp      = rollFull + 100 + (rand() % 901);
+        maxHp      = rollFull + 100 + (rand() % 901); // Player HP: Roll No + random(100-1000)
         Hp         = maxHp;
-        demage     = rollLastDig + 10;
-        speed      = (speedOverride > 0.f) ? speedOverride : 100.f;
-        MaxStamina = 100;
+        demage     = rollLastDig + 10; // Player Damage: Last digit of Roll No + 10
+        speed      = (speedOverride > 0.f) ? speedOverride : 4.f; // Adjusted default speed to 4
+        MaxStamina = 100; // Player Max Stamina: 100
         stamina    = 0;
         alive      = true;
         myTurn     = false;
