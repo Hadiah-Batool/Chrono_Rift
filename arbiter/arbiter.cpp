@@ -208,6 +208,7 @@ public:
                         shared_block->state.enemies[i].setAlive(true);
                         shared_block->state.enemies[i].clearStun();
                         shared_block->state.enemies[i].ResetStamina();
+                        shared_block->state.enemies[i].setDemage(55);
 
                         shared_block->state.enemies[i].InitAllProperties(static_cast<float>(x), static_cast<float>(y));
                         std::cout << "  -> Spawned Enemy " << i << " (Type: " << type << ")\n";
@@ -408,35 +409,80 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
     }
 
     case Action::USE_WEAPON: {
-        // Prevent hitting dead enemies
         if (!shared_block->state.enemies[target_id].isAlive()) {
             std::cout << "[ARBITER] Target already dead. Weapon strike wasted!\n";
             shared_block->state.players[attacker_id].ResetStamina();
             break;
         }
 
-        // CORRECT LOGIC: Actually fetch the damage from the inventory!
-        int weapon_id = shared_block->hip_mailbox.weapon_id;
+        int weapon_id     = shared_block->hip_mailbox.weapon_id;
         int weapon_damage = 0;
 
-        if (shared_block->state.players[attacker_id].getInventory().hasWeapon(weapon_id)) {
-            // equipped weapons are stored as std::pair<int, Weapon>
-            // access the Weapon via .second
-            weapon_damage = shared_block->state.players[attacker_id].getInventory().getEquippedWeapons().at(weapon_id).second.getDamage();
+        std::cout << "[ARBITER] USE_WEAPON: attacker=" << attacker_id
+                << " weapon_id=" << weapon_id
+                << " target=" << target_id << "\n";
+
+        // ── Try equipped inventory first ──────────────────────────────────────
+        const auto& equipped = shared_block->state.players[attacker_id]
+                                .getInventory().getEquippedWeapons();
+
+        if (weapon_id >= 0)
+        {
+            auto it = std::find_if(equipped.begin(), equipped.end(),
+                                   [weapon_id](const auto &p){ return p.first == weapon_id; });
+            if (it != equipped.end())
+            {
+                weapon_damage = it->second.getDamage();
+                std::cout << "[ARBITER] Found weapon in inventory: dmg=" << weapon_damage << "\n";
+            }
+            else
+            {
+                // fall through to fallback handling below
+            }
+        }
+        // ── Fallback: search by slot index if ID lookup failed ────────────────
+        else
+        {
+            std::cout << "[ARBITER] weapon_id=" << weapon_id
+                    << " not found in inventory — dumping equipped weapons:\n";
+            int slot = 0;
+            for (const auto& pair : equipped)
+            {
+                std::cout << "  slot=" << slot
+                        << " id=" << pair.first
+                        << " name=" << pair.second.getName()
+                        << " dmg=" << pair.second.getDamage() << "\n";
+                slot++;
+            }
+
+            // If weapon_id is -1, use the first available weapon as fallback
+            if (!equipped.empty())
+            {
+                weapon_damage = equipped.begin()->second.getDamage();
+                std::cout << "[ARBITER] Fallback: using first weapon dmg=" << weapon_damage << "\n";
+            }
+            else
+            {
+                // No weapons at all — use base damage
+                weapon_damage = shared_block->state.players[attacker_id].getDemage();
+                std::cout << "[ARBITER] No weapons found — using base dmg=" << weapon_damage << "\n";
+            }
         }
 
         shared_block->state.enemies[target_id].TakeDamage(weapon_damage);
-        std::cout << "[ARBITER] Player " << attacker_id << " used weapon " << weapon_id
-                  << " on Enemy " << target_id << " for " << weapon_damage << " DMG!\n";
+        std::cout << "[ARBITER] Player " << attacker_id
+                << " used weapon " << weapon_id
+                << " on Enemy " << target_id
+                << " for " << weapon_damage << " DMG! "
+                << "(Enemy HP: " << shared_block->state.enemies[target_id].getHp() << ")\n";
 
-        // CORRECT PLACEMENT: After damage is taken, replacing the duplicate block entirely.
-        if (!shared_block->state.enemies[target_id].isAlive()) {
+        if (!shared_block->state.enemies[target_id].isAlive())
             handle_enemy_death(shared_block, target_id);
-        }
 
         shared_block->state.players[attacker_id].ResetStamina();
         break;
     }
+
 
     case Action::SWAP_IN: {
         int backpack_idx = shared_block->hip_mailbox.weapon_id;  // renderer sends index
