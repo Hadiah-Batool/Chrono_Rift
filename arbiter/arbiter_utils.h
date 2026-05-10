@@ -1,28 +1,55 @@
-#include "arbiter_utils.h"
+#ifndef ARBITER_UTILS_H
+#define ARBITER_UTILS_H
+
+#include <fstream>
+#include <pthread.h>
+#include <vector>
+#include <array>
+#include <queue>
+#include <signal.h>
+#include <iostream>
+#include "../resources/shared_mem_abs.h"
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <string>
+#include "../Characters/Player.h"
+#include "../Characters/Enemy.h"
+#include "../Weapons/Weapons.h"
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <cstring>
+#include "../shared/game_state.h"
+#include <time.h>
+
+using std::vector;
+using std::cout;
+using std::endl;
+using std::array;
+
+#define time_of_response 3
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  GLOBALS DEFINITION
+//  GLOBALS (Defined in arbiter.cpp)
 // ─────────────────────────────────────────────────────────────────────────────
-pid_t g_asp_pid = -1;
-SharedMemoryBlock* g_shm_ptr = nullptr;
-volatile sig_atomic_t g_sigalrm_received = 0;
-volatile sig_atomic_t g_sigterm_received = 0;
-
-static void handle_sigalrm(int sig) { g_sigalrm_received = 1; }
-static void handle_sigterm(int sig) { g_sigterm_received = 1; }
+extern pid_t g_asp_pid;
+extern SharedMemoryBlock* g_shm_ptr;
+extern volatile sig_atomic_t g_sigalrm_received;
+extern volatile sig_atomic_t g_sigterm_received;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ARTIFACT HELPER SECTION (Requires resource_table_mutex lock)
 // ─────────────────────────────────────────────────────────────────────────────
 
-static int find_artifact_idx(SharedMemoryBlock* sb, int weapon_id) {
+static inline int find_artifact_idx(SharedMemoryBlock* sb, int weapon_id) {
     for (int i = 0; i < sb->state.num_artifacts; ++i)
-        if (sb->state.artifacts[i].getWeaponId() == weapon_id)
+        // GUARD ADDED: Must be available!
+        if (sb->state.artifacts[i].getWeaponId() == weapon_id && sb->state.artifacts[i].isAvailable())
             return i;
     return -1;
 }
 
-static bool try_grant_artifact_to_player(SharedMemoryBlock* sb, int player_idx, int art_idx) {
+static inline bool try_grant_artifact_to_player(SharedMemoryBlock* sb, int player_idx, int art_idx) {
     Artifact& art = sb->state.artifacts[art_idx];
     if (art.isHeld()) {
         sb->state.players_artifact_state[player_idx].waiting_for_artifact_idx = art_idx;
@@ -41,7 +68,7 @@ static bool try_grant_artifact_to_player(SharedMemoryBlock* sb, int player_idx, 
     return true;
 }
 
-static bool try_grant_artifact_to_enemy(SharedMemoryBlock* sb, int enemy_idx, int art_idx) {
+static inline bool try_grant_artifact_to_enemy(SharedMemoryBlock* sb, int enemy_idx, int art_idx) {
     Artifact& art = sb->state.artifacts[art_idx];
     if (art.isHeld()) {
         sb->state.enemies_artifact_state[enemy_idx].waiting_for_artifact_idx = art_idx;
@@ -57,32 +84,48 @@ static bool try_grant_artifact_to_enemy(SharedMemoryBlock* sb, int enemy_idx, in
     return true;
 }
 
-static void release_artifact_from_player(SharedMemoryBlock* sb, int player_idx) {
+// --- ADD THIS HELPER TO UNFREEZE WAITING ENTITIES ---
+static inline void wake_waiters_for_artifact(SharedMemoryBlock* sb, int art_idx) {
+    for(int p = 0; p < sb->state.num_active_players; ++p) {
+        if (sb->state.players_artifact_state[p].waiting_for_artifact_idx == art_idx)
+            sb->state.players_artifact_state[p].waiting_for_artifact_idx = -1;
+    }
+    for(int e = 0; e < sb->state.num_active_enemies; ++e) {
+        if (sb->state.enemies_artifact_state[e].waiting_for_artifact_idx == art_idx)
+            sb->state.enemies_artifact_state[e].waiting_for_artifact_idx = -1;
+    }
+}
+
+static inline void release_artifact_from_player(SharedMemoryBlock* sb, int player_idx) {
     int art_idx = sb->state.players_artifact_state[player_idx].holding_artifact_idx;
     if (art_idx < 0) return;
     sb->state.artifacts[art_idx].release();
     sb->state.players_artifact_state[player_idx].holding_artifact_idx   = -1;
     sb->state.players_artifact_state[player_idx].waiting_for_artifact_idx = -1;
     std::cout << "[ARBITER][ARTIFACT] Player " << player_idx << " released artifact " << art_idx << "\n";
+
+    wake_waiters_for_artifact(sb, art_idx); // <--- AWAKENS EVERYONE WAITING FOR IT
     pthread_cond_broadcast(&sb->turn_condition);
 }
 
-static void release_artifact_from_enemy(SharedMemoryBlock* sb, int enemy_idx) {
+static inline void release_artifact_from_enemy(SharedMemoryBlock* sb, int enemy_idx) {
     int art_idx = sb->state.enemies_artifact_state[enemy_idx].holding_artifact_idx;
     if (art_idx < 0) return;
     sb->state.artifacts[art_idx].release();
     sb->state.enemies_artifact_state[enemy_idx].holding_artifact_idx   = -1;
     sb->state.enemies_artifact_state[enemy_idx].waiting_for_artifact_idx = -1;
     std::cout << "[ARBITER][ARTIFACT] Enemy " << enemy_idx << " released artifact " << art_idx << "\n";
+
+    wake_waiters_for_artifact(sb, art_idx); // <--- AWAKENS EVERYONE WAITING FOR IT
     pthread_cond_broadcast(&sb->turn_condition);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  WEAPON DROP & DEATH HANDLER (Sections 6 & 7)
+//  WEAPON DROP & DEATH HANDLER
 // ─────────────────────────────────────────────────────────────────────────────
 
-static Weapon generateRandomWeapon(int& out_id) {
-    static int weapon_counter = 100; // High ID to avoid clashing with standard inventory
+static inline Weapon generateRandomWeapon(int& out_id) {
+    static int weapon_counter = 100;
     int type_rand = rand() % 6;
     out_id = weapon_counter++;
 
@@ -96,7 +139,7 @@ static Weapon generateRandomWeapon(int& out_id) {
     }
 }
 
-static void handle_enemy_death(SharedMemoryBlock* shared_block, int target_id) {
+static inline void handle_enemy_death(SharedMemoryBlock* shared_block, int target_id) {
     release_artifact_from_enemy(shared_block, target_id);
     shared_block->state.enemies_defeated++;
     std::cout << "[ARBITER] Enemy " << target_id
@@ -105,7 +148,6 @@ static void handle_enemy_death(SharedMemoryBlock* shared_block, int target_id) {
 
     int drop_roll = rand() % 100;
 
-    // ── Eclipse Relic: 10% chance, only if not yet introduced ────────────
     if (drop_roll < 10
         && !shared_block->state.artifacts[2].isAvailable()
         && !shared_block->state.artifacts[2].isHeld())
@@ -115,12 +157,9 @@ static void handle_enemy_death(SharedMemoryBlock* shared_block, int target_id) {
         pthread_mutex_lock(&shared_block->resource_table_mutex);
         shared_block->state.artifacts[2].introduce();
         pthread_mutex_unlock(&shared_block->resource_table_mutex);
-        return;   // ← relic introduction counts as the drop event, done
+        return;
     }
 
-    // ── Weapon drop: 60% chance ───────────────────────────────────────────
-    // Roll independently — don't let "ground already has weapon" silently
-    // swallow the roll. Instead, tell the player why nothing dropped.
     if (drop_roll >= 10 && drop_roll < 70)
     {
         if (shared_block->state.is_weapon_dropped)
@@ -144,7 +183,6 @@ static void handle_enemy_death(SharedMemoryBlock* shared_block, int target_id) {
         return;
     }
 
-    // ── 30% chance: nothing drops ─────────────────────────────────────────
     std::cout << "[ARBITER] Enemy " << target_id << " dropped nothing.\n";
 }
 
@@ -177,7 +215,6 @@ public:
                         shared_block->state.enemies[i].setAlive(true);
                         shared_block->state.enemies[i].clearStun();
                         shared_block->state.enemies[i].ResetStamina();
-                        shared_block->state.enemies[i].setDemage(55);
 
                         shared_block->state.enemies[i].InitAllProperties(static_cast<float>(x), static_cast<float>(y));
                         std::cout << "  -> Spawned Enemy " << i << " (Type: " << type << ")\n";
@@ -198,7 +235,6 @@ public:
             int num_players_in_file;
             if (infile >> num_players_in_file) {
                 std::cout << "[ARBITER] Parsing " << filename << " for player positions.\n";
-                // Only position the number of players actually in the game
                 int limit = std::min(num_players_in_file, shared_block->state.num_active_players);
                 for (int i = 0; i < limit; ++i) {
                     int x, y, type;
@@ -264,11 +300,10 @@ public:
 //  STAMINA THREAD
 // ─────────────────────────────────────────────────────────────────────────────
 
-void* stamina_recovery(void* arg){
+inline void* stamina_recovery(void* arg){
     auto* shared_block = static_cast<SharedMemoryBlock*>(arg);
     while(true){
         pthread_mutex_lock(&shared_block->global_mutex);
-        // ADD THIS CHECK TO BREAK INSTANTLY:
         if (!shared_block->state.game_running || g_sigterm_received) {
             pthread_mutex_unlock(&shared_block->global_mutex);
             break;
@@ -308,11 +343,10 @@ void* stamina_recovery(void* arg){
 //  ACTION HANDLERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-void handle_player_action(const ActionRequest& request, SharedMemoryBlock* shared_block) {
+inline void handle_player_action(const ActionRequest& request, SharedMemoryBlock* shared_block) {
     int attacker_id = shared_block->hip_mailbox.requesting_entity_id;
     int target_id   = shared_block->hip_mailbox.target_id;
 
-    // --- RULE: If a player takes an action that is NOT Pickup, the enemy steals it! ---
     if (shared_block->state.is_weapon_dropped && request.action_type != Action::PICKUP) {
         std::cout << "[ARBITER] Player " << attacker_id << " ignored the dropped weapon!\n";
         for(int e = 0; e < shared_block->state.num_active_enemies; e++) {
@@ -347,7 +381,6 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
     }
 
     case Action::STRIKE: {
-        // Prevent hitting dead enemies
         if (!shared_block->state.enemies[target_id].isAlive()) {
             std::cout << "[ARBITER] Target already dead. Strike wasted!\n";
             shared_block->state.players[attacker_id].ResetStamina();
@@ -360,7 +393,6 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         std::cout << "[ARBITER] Player " << attacker_id << " struck Enemy " << target_id
           << " for " << damage << " DMG! (Enemy HP: " << shared_block->state.enemies[target_id].getHp() << ")" << endl;
 
-        // CORRECT PLACEMENT: After damage is taken, replace all old death logic.
         if (!shared_block->state.enemies[target_id].isAlive()) {
             handle_enemy_death(shared_block, target_id);
         }
@@ -384,89 +416,34 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
             break;
         }
 
-        int weapon_id     = shared_block->hip_mailbox.weapon_id;
+        int weapon_id = shared_block->hip_mailbox.weapon_id;
         int weapon_damage = 0;
 
-        std::cout << "[ARBITER] USE_WEAPON: attacker=" << attacker_id
-                << " weapon_id=" << weapon_id
-                << " target=" << target_id << "\n";
-
-        // ── Try equipped inventory first ──────────────────────────────────────
-        const auto& equipped = shared_block->state.players[attacker_id]
-                                .getInventory().getEquippedWeapons();
-
-        if (weapon_id >= 0)
-        {
-            auto it = std::find_if(equipped.begin(), equipped.end(),
-                                   [weapon_id](const auto &p){ return p.first == weapon_id; });
-            if (it != equipped.end())
-            {
-                weapon_damage = it->second.getDamage();
-                std::cout << "[ARBITER] Found weapon in inventory: dmg=" << weapon_damage << "\n";
-            }
-            else
-            {
-                // fall through to fallback handling below
-            }
-        }
-        // ── Fallback: search by slot index if ID lookup failed ────────────────
-        else
-        {
-            std::cout << "[ARBITER] weapon_id=" << weapon_id
-                    << " not found in inventory — dumping equipped weapons:\n";
-            int slot = 0;
-            for (const auto& pair : equipped)
-            {
-                std::cout << "  slot=" << slot
-                        << " id=" << pair.first
-                        << " name=" << pair.second.getName()
-                        << " dmg=" << pair.second.getDamage() << "\n";
-                slot++;
-            }
-
-            // If weapon_id is -1, use the first available weapon as fallback
-            if (!equipped.empty())
-            {
-                weapon_damage = equipped.begin()->second.getDamage();
-                std::cout << "[ARBITER] Fallback: using first weapon dmg=" << weapon_damage << "\n";
-            }
-            else
-            {
-                // No weapons at all — use base damage
-                weapon_damage = shared_block->state.players[attacker_id].getDemage();
-                std::cout << "[ARBITER] No weapons found — using base dmg=" << weapon_damage << "\n";
-            }
+        if (shared_block->state.players[attacker_id].getInventory().hasWeapon(weapon_id)) {
+            weapon_damage = shared_block->state.players[attacker_id].getInventory().getEquippedWeapons().at(weapon_id).second.getDamage();
         }
 
         shared_block->state.enemies[target_id].TakeDamage(weapon_damage);
-        std::cout << "[ARBITER] Player " << attacker_id
-                << " used weapon " << weapon_id
-                << " on Enemy " << target_id
-                << " for " << weapon_damage << " DMG! "
-                << "(Enemy HP: " << shared_block->state.enemies[target_id].getHp() << ")\n";
+        std::cout << "[ARBITER] Player " << attacker_id << " used weapon " << weapon_id
+                  << " on Enemy " << target_id << " for " << weapon_damage << " DMG!\n";
 
-        if (!shared_block->state.enemies[target_id].isAlive())
+        if (!shared_block->state.enemies[target_id].isAlive()) {
             handle_enemy_death(shared_block, target_id);
+        }
 
         shared_block->state.players[attacker_id].ResetStamina();
         break;
     }
 
-
     case Action::SWAP_IN: {
-        int backpack_idx = shared_block->hip_mailbox.weapon_id;  // renderer sends index
+        int backpack_idx = shared_block->hip_mailbox.weapon_id;
         int bp_count = shared_block->state.players[attacker_id].getBackpack().getCount();
 
-        if (backpack_idx >= 0 && backpack_idx < bp_count)
-        {
+        if (backpack_idx >= 0 && backpack_idx < bp_count) {
             shared_block->state.players[attacker_id].swapInFromBackpack(backpack_idx);
-            std::cout << "[ARBITER] Player " << attacker_id
-                    << " swapped in backpack slot " << backpack_idx << "\n";
-        }
-        else
-        {
-            std::cout << "[ARBITER] SWAP_IN ignored: invalid backpack index "
-                    << backpack_idx << " (count=" << bp_count << ")\n";
+            std::cout << "[ARBITER] Player " << attacker_id << " swapped in backpack slot " << backpack_idx << "\n";
+        } else {
+            std::cout << "[ARBITER] SWAP_IN ignored: invalid backpack index " << backpack_idx << " (count=" << bp_count << ")\n";
         }
         shared_block->state.players[attacker_id].ResetStamina();
         break;
@@ -514,18 +491,13 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
         break;
     }
     case Action::ULTIMATE: {
-        // Artifact IDs: Solar Core = 0, Lunar Blade = 1
         bool has_solar = shared_block->state.players[attacker_id].getInventory().hasWeapon(0);
         bool has_lunar = shared_block->state.players[attacker_id].getInventory().hasWeapon(1);
 
         if (has_solar && has_lunar) {
             std::cout << "\n[ARBITER] *** Player " << attacker_id << " triggered the ULTIMATE ABILITY! ***\n";
             std::cout << "[ARBITER] *** Sending SIGSTOP to ASP. Enemies frozen for 10 seconds! ***\n\n";
-
-            // 1. Freeze the ASP immediately at the OS level
             kill(g_asp_pid, SIGSTOP);
-
-            // 2. Set an OS alarm to fire exactly 10 seconds from now
             alarm(10);
         } else {
             std::cout << "[ARBITER] Player " << attacker_id << " attempted Ultimate but lacks the required artifacts (Needs both Solar Core and Lunar Blade)!\n";
@@ -538,18 +510,17 @@ void handle_player_action(const ActionRequest& request, SharedMemoryBlock* share
     }
 }
 
-void handle_enemy_action(const ActionRequest& request, SharedMemoryBlock* shared_block) {
+inline void handle_enemy_action(const ActionRequest& request, SharedMemoryBlock* shared_block) {
     int attacker_id = shared_block->asp_mailbox.requesting_entity_id;
     int target_id   = shared_block->asp_mailbox.target_id;
 
     if (shared_block->state.is_weapon_dropped) {
-        if (shared_block->state.enemies[attacker_id].isAlive()) { // <-- ADDED GUARD
+        if (shared_block->state.enemies[attacker_id].isAlive()) {
             shared_block->state.enemies[attacker_id].setDemage(shared_block->state.enemies[attacker_id].getDemage() + shared_block->state.dropped_weapon.getDamage());
             std::cout << "[ARBITER] Enemy " << attacker_id << " snatched the dropped weapon on its turn!\n";
         }
         shared_block->state.is_weapon_dropped = false;
         shared_block->state.dropped_by_enemy_id = -1;
-
     }
 
     switch (request.action_type) {
@@ -611,13 +582,13 @@ static inline int holder_of(SharedMemoryBlock* sb, int art_idx) {
     return sb->state.artifacts[art_idx].isHeld() ? sb->state.artifacts[art_idx].getHolder() : -1;
 }
 
-static int waiting_for(SharedMemoryBlock* sb, int entity_id) {
+static inline int waiting_for(SharedMemoryBlock* sb, int entity_id) {
     if (entity_id >= 0 && entity_id < 4) return sb->state.players_artifact_state[entity_id].waiting_for_artifact_idx;
     if (entity_id >= 10 && entity_id < 19) return sb->state.enemies_artifact_state[entity_id - 10].waiting_for_artifact_idx;
     return -1;
 }
 
-static void force_abandon_wait(SharedMemoryBlock* sb, int entity_id) {
+static inline void force_abandon_wait(SharedMemoryBlock* sb, int entity_id) {
     if (entity_id >= 0 && entity_id < 4) {
         int art_idx = sb->state.players_artifact_state[entity_id].waiting_for_artifact_idx;
         sb->state.players_artifact_state[entity_id].waiting_for_artifact_idx = -1;
@@ -635,7 +606,7 @@ static void force_abandon_wait(SharedMemoryBlock* sb, int entity_id) {
     }
 }
 
-void* deadlock_detection(void* arg) {
+inline void* deadlock_detection(void* arg) {
     auto* sb = static_cast<SharedMemoryBlock*>(arg);
     while (true) {
         sleep(10);
@@ -660,17 +631,29 @@ void* deadlock_detection(void* arg) {
             int art_X    = waiting_for(sb, entity_A);
             int entity_B = holder_of(sb, art_X);
             if (entity_B == -1) continue;
+
             int art_Y    = waiting_for(sb, entity_B);
             if (art_Y == -1) continue;
             int entity_C = holder_of(sb, art_Y);
-            if (entity_C != entity_A) continue;
 
-            std::cout << "[ARBITER][DEADLOCK] *** CIRCULAR WAIT DETECTED ***\n"
-                      << "  Entity " << entity_A << " waiting for artifact " << art_X << " (held by " << entity_B << ")\n"
-                      << "  Entity " << entity_B << " waiting for artifact " << art_Y << " (held by " << entity_A << ")\n"
-                      << "[ARBITER][DEADLOCK] Resolution: forcing entity " << entity_A << " to abandon its wait.\n";
-            force_abandon_wait(sb, entity_A);
-            deadlock_found = true;
+            // CHECK FOR 2-WAY AND 3-WAY DEADLOCKS
+            if (entity_C == entity_A) {
+                std::cout << "[ARBITER][DEADLOCK] *** 2-WAY CIRCULAR WAIT DETECTED ***\n"
+                          << "  Entity " << entity_A << " waits for " << entity_B << " who waits for " << entity_A << "\n";
+                force_abandon_wait(sb, entity_A);
+                deadlock_found = true;
+            } else if (entity_C != -1) {
+                int art_Z = waiting_for(sb, entity_C);
+                if (art_Z != -1) {
+                    int entity_D = holder_of(sb, art_Z);
+                    if (entity_D == entity_A) {
+                        std::cout << "[ARBITER][DEADLOCK] *** 3-WAY CIRCULAR WAIT DETECTED ***\n"
+                                  << "  Entity " << entity_A << " -> " << entity_B << " -> " << entity_C << " -> " << entity_A << "\n";
+                        force_abandon_wait(sb, entity_A);
+                        deadlock_found = true;
+                    }
+                }
+            }
         }
         if (!deadlock_found) std::cout << "[ARBITER][DEADLOCK] Watchdog tick: no deadlock detected.\n";
         pthread_mutex_unlock(&sb->resource_table_mutex);
@@ -682,272 +665,4 @@ void* deadlock_detection(void* arg) {
     return nullptr;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  MAIN KERNEL LOOP
-// ─────────────────────────────────────────────────────────────────────────────
-
-bool need_more_enemies(const SharedMemoryBlock* shared_block) {
-    for (int i = 0; i < shared_block->state.num_active_enemies; ++i) {
-        if (shared_block->state.enemies[i].isAlive()) return false;
-    }
-    return true;
-}
-
-int main(int argc, char* argv[]) {
-    unsigned int seed = std::hash<std::string>{}("24I0805");
-    srand(seed);
-    pthread_t stamina_accumalator, deadlock_detector;
-
-    struct sigaction sa_alrm{};
-    sigemptyset(&sa_alrm.sa_mask);
-    sa_alrm.sa_handler = handle_sigalrm;
-    sigaction(SIGALRM, &sa_alrm, nullptr);
-
-    struct sigaction sa_term{};
-    sigemptyset(&sa_term.sa_mask);
-    sa_term.sa_handler = handle_sigterm;
-    sigaction(SIGTERM, &sa_term, nullptr);
-
-    const char* shm_name = "/game_state_shm";
-    shm_unlink(shm_name);
-    SharedMem master_shm(shm_name, sizeof(SharedMemoryBlock), true, true);
-    SharedMemoryBlock* shared_block = static_cast<SharedMemoryBlock*>(master_shm.getPtr());
-
-    g_shm_ptr = shared_block;
-
-    pthread_mutexattr_t mutex_attr;
-    pthread_mutexattr_init(&mutex_attr);
-    pthread_mutexattr_setpshared(&mutex_attr, PTHREAD_PROCESS_SHARED);
-    pthread_mutex_init(&shared_block->global_mutex, &mutex_attr);
-    pthread_mutex_init(&shared_block->resource_table_mutex, &mutex_attr);
-
-    pthread_condattr_t cond_attr;
-    pthread_condattr_init(&cond_attr);
-    pthread_condattr_setpshared(&cond_attr, PTHREAD_PROCESS_SHARED);
-    pthread_cond_init(&shared_block->turn_condition, &cond_attr);
-
-    for (int i = 0; i < 4; i++) {
-        shared_block->state.players_artifact_state[i].waiting_for_artifact_idx = -1;
-        shared_block->state.players_artifact_state[i].holding_artifact_idx = -1;
-    }
-    for (int i = 0; i < 9; i++) {
-        shared_block->state.enemies_artifact_state[i].waiting_for_artifact_idx = -1;
-        shared_block->state.enemies_artifact_state[i].holding_artifact_idx = -1;
-    }
-
-    shared_block->state.game_running = true;
-    shared_block->state.level = 1;
-    shared_block->state.sublevel = 1;
-    shared_block->state.enemies_defeated = 0;
-    Arbiter arbiter(shared_block);
-
-    pid_t hip_pid = fork();
-    if (hip_pid == 0) { execl("./hip.out", "./hip.out", shm_name, nullptr);
-        std::cout<<"Could not launch HIP process. Make sure hip.out is compiled and in the same directory.\n";
-        return 1;
-     }
-    pid_t asp_pid = fork();
-    if (asp_pid == 0) { execl("./asp.out", "./asp.out", shm_name, nullptr);
-        std::cout<<"Could not launch ASP process. Make sure asp.out is compiled and in the same directory.\n";
-        return 1;
-    }
-
-    g_asp_pid = asp_pid;
-
-    pthread_mutex_lock(&shared_block->global_mutex);
-    shared_block->state.current_turn_owner_id = -2;
-    pthread_cond_broadcast(&shared_block->turn_condition);
-
-    while (!shared_block->hip_mailbox.is_ready && !g_sigterm_received) {
-        pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
-    }
-    if (!g_sigterm_received) {
-        handle_player_action(shared_block->hip_mailbox, shared_block);
-    }
-
-    arbiter.initialize_entities(0607, 7, 7, shared_block->state.level, shared_block->state.sublevel);
-    arbiter.initialize_players_positions(shared_block->state.level, shared_block->state.sublevel);
-
-    shared_block->hip_mailbox.is_ready = false;
-    pthread_mutex_unlock(&shared_block->global_mutex);
-
-    // ── ARTIFACT DROP SCHEDULE ────────────────────────────────────────────────
-    shared_block->state.num_artifacts = 3;
-
-    // All three start hidden (exists=false). They are re-constructed as
-    // their real types when their drop turn arrives in the game loop below.
-    new (&shared_block->state.artifacts[0]) Artifact(0, ArtifactType::ECLIPSE_RELIC, "Solar Core",    95, 10);
-    new (&shared_block->state.artifacts[1]) Artifact(1, ArtifactType::ECLIPSE_RELIC, "Lunar Blade",   90, 10);
-    new (&shared_block->state.artifacts[2]) Artifact(2, ArtifactType::ECLIPSE_RELIC, "Eclipse Relic",  0,  5);
-
-    int artifact_drop_turn[3];
-    artifact_drop_turn[0] = 10 + (rand() % 2);
-    artifact_drop_turn[1] = artifact_drop_turn[0] + 1 + (rand() % 2);
-    artifact_drop_turn[2] = artifact_drop_turn[1] + 1 + (rand() % 2);
-    bool artifact_dropped[3] = { false, false, false };
-
-    std::cout << "[ARBITER] Artifact drop schedule — "
-              << "Solar Core: turn "    << artifact_drop_turn[0]
-              << ", Lunar Blade: turn " << artifact_drop_turn[1]
-              << ", Eclipse Relic: turn " << artifact_drop_turn[2] << "\n";
-
-    pthread_create(&stamina_accumalator, NULL, stamina_recovery, shared_block);
-    pthread_create(&deadlock_detector, NULL, deadlock_detection, shared_block);
-
-    while (shared_block->state.game_running) {
-        pthread_mutex_lock(&shared_block->global_mutex);
-        int turn_index = -1;
-        bool is_player = false;
-        arbiter.find_turn(&turn_index, &is_player);
-
-        if (turn_index != -1) {
-            shared_block->state.current_turn_owner_id = turn_index;
-            shared_block->state.is_player_turn = is_player;
-            pthread_cond_broadcast(&shared_block->turn_condition);
-
-            if (is_player) {
-                while (!shared_block->hip_mailbox.is_ready && shared_block->state.game_running && !g_sigterm_received) {
-                    pthread_cond_wait(&shared_block->turn_condition, &shared_block->global_mutex);
-                }
-
-                if (g_sigterm_received) {
-                    pthread_mutex_unlock(&shared_block->global_mutex);
-                    break;
-                }
-
-                if (shared_block->state.game_running) {
-                    handle_player_action(shared_block->hip_mailbox, shared_block);
-                }
-            } else {
-                struct timespec ts;
-                clock_gettime(CLOCK_REALTIME, &ts);
-                ts.tv_sec += 3;
-                int res = 0;
-
-                while (!shared_block->asp_mailbox.is_ready && res != ETIMEDOUT && shared_block->state.game_running && !g_sigterm_received) {
-                    res = pthread_cond_timedwait(&shared_block->turn_condition, &shared_block->global_mutex, &ts);
-                }
-
-                if (g_sigterm_received) {
-                    pthread_mutex_unlock(&shared_block->global_mutex);
-                    break;
-                }
-
-                if (shared_block->state.game_running) {
-                    if (res == ETIMEDOUT && !shared_block->asp_mailbox.is_ready) {
-                        shared_block->asp_mailbox.action_type = Action::SKIP;
-                        shared_block->asp_mailbox.requesting_entity_id = turn_index;
-                    }
-                    handle_enemy_action(shared_block->asp_mailbox, shared_block);
-                }
-            }
-
-            shared_block->hip_mailbox.is_ready = false;
-            shared_block->asp_mailbox.is_ready = false;
-
-            if (shared_block->state.enemies_defeated >= 10) {
-                std::cout << "[ARBITER] 10 Enemies Slain. Objective Complete. YOU WIN!\n";
-                shared_block->state.game_running = false;
-                shared_block->state.game_result = true;
-                pthread_mutex_unlock(&shared_block->global_mutex);
-                break;
-            } else if (shared_block->state.num_active_players == 0) {
-                std::cout << "[ARBITER] All players have fallen. YOU LOSE!\n";
-                shared_block->state.game_running = false;
-                shared_block->state.game_result = false;
-                pthread_mutex_unlock(&shared_block->global_mutex);
-                break;
-            }
-
-            if(shared_block->state.game_running && need_more_enemies(shared_block)) {
-                shared_block->state.hassublevelended = true;
-                shared_block->state.sublevel++;
-                std::cout << "[ARBITER] Wave cleared! Loading Sublevel " << shared_block->state.sublevel << "...\n";
-                arbiter.initialize_entities(0607, 7, 7, shared_block->state.level, shared_block->state.sublevel);
-                arbiter.initialize_players_positions(shared_block->state.level, shared_block->state.sublevel);
-
-                for(int i = 0; i < shared_block->state.num_active_players; ++i) shared_block->state.players[i].setStamina(0);
-                kill(asp_pid, SIGUSR1);
-                shared_block->state.current_turn_owner_id = -3;
-                pthread_cond_broadcast(&shared_block->turn_condition);
-                shared_block->state.hassublevelended = false;
-                std::cout << "[ARBITER] HIP rendering complete. Resuming combat!\n";
-                usleep(50000);
-            }
-            shared_block->state.turn_count++;
-
-            // ── ARTIFACT DROP CHECK ───────────────────────────────────────────────────
-            {
-                struct { ArtifactType type; const char* name; int dmg; int slots; } schedule[3] = {
-                    { ArtifactType::SOLAR_CORE,    "Solar Core",    95, 10 },
-                    { ArtifactType::LUNAR_BLADE,   "Lunar Blade",   90, 10 },
-                    { ArtifactType::ECLIPSE_RELIC, "Eclipse Relic",  0,  5 },
-                };
-                for (int a = 0; a < 3; ++a) {
-                    if (!artifact_dropped[a] &&
-                        shared_block->state.turn_count >= artifact_drop_turn[a])
-                    {
-                        artifact_dropped[a] = true;
-                        pthread_mutex_lock(&shared_block->resource_table_mutex);
-                        // Re-construct in-place as the real type
-                        new (&shared_block->state.artifacts[a]) Artifact(
-                            a, schedule[a].type, schedule[a].name,
-                            schedule[a].dmg, schedule[a].slots);
-                        // Reveal Eclipse Relic
-                        if (schedule[a].type == ArtifactType::ECLIPSE_RELIC)
-                            shared_block->state.artifacts[a].introduce();
-                        pthread_mutex_unlock(&shared_block->resource_table_mutex);
-
-                        std::cout << "\n[ARBITER] *** " << schedule[a].name
-                                  << " has appeared on turn " << shared_block->state.turn_count
-                                  << "! Use GET_ARTIFACT to claim it. ***\n\n";
-                    }
-                }
-            }
-
-            shared_block->state.current_turn_owner_id = -1;
-        }
-        pthread_mutex_unlock(&shared_block->global_mutex);
-
-        if (g_sigalrm_received) {
-            g_sigalrm_received = 0;
-            if (g_asp_pid > 0) {
-                std::cout << "\n[ARBITER] *** 10 SECONDS PASSED! ULTIMATE ABILITY ENDED! ***\n";
-                std::cout << "[ARBITER] *** Sending SIGCONT to ASP. Time resumes for enemies! ***\n> ";
-                std::cout.flush();
-                kill(g_asp_pid, SIGCONT);
-            }
-        }
-        if (g_sigterm_received) {
-            g_sigterm_received = 0;
-            pthread_mutex_lock(&shared_block->global_mutex);
-            std::cout << "\n[ARBITER] SIGTERM received! Commencing graceful shutdown...\n";
-            shared_block->state.game_running = false;
-            pthread_cond_broadcast(&shared_block->turn_condition);
-            pthread_mutex_unlock(&shared_block->global_mutex);
-        }
-
-        usleep(10000);
-    }
-
-    std::cout << "\n[ARBITER] Sending SIGTERM to child processes...\n";
-    kill(hip_pid, SIGTERM);
-    kill(asp_pid, SIGTERM);
-
-    std::cout << "[ARBITER] Waiting for HIP to close...\n";
-    waitpid(hip_pid, NULL, 0);
-
-    std::cout << "[ARBITER] HIP closed. Waiting for ASP to close...\n";
-    waitpid(asp_pid, NULL, 0);
-
-    std::cout << "[ARBITER] ASP closed. Canceling background threads...\n";
-    pthread_cancel(stamina_accumalator);
-    pthread_cancel(deadlock_detector);
-
-    std::cout << "[ARBITER] Destroying Mutexes. Game successfully terminated.\n";
-    pthread_mutex_destroy(&shared_block->global_mutex);
-    pthread_mutex_destroy(&shared_block->resource_table_mutex);
-    pthread_cond_destroy(&shared_block->turn_condition);
-
-    return 0;
-}
+#endif // ARBITER_UTILS_H
