@@ -308,86 +308,67 @@ int main(int argc, char* argv[])
 {
     if (argc < 2) { std::cerr << "[HIP] Usage: hip <shm_name>\n"; return 1; }
 
-    const char* shmName = argv[1];
-
-    // ── PHASE 1: Attach shared memory ────────────────────────────────────────
-    int fd = shm_open(shmName, O_RDWR, 0666);
-    if (fd < 0) { perror("[HIP] shm_open"); return 1; }
-
+    // ── Attach shm ────────────────────────────────────────────────────────
+    int fd = shm_open(argv[1], O_RDWR, 0666);
     SharedMemoryBlock* shm = (SharedMemoryBlock*)mmap(
         nullptr, sizeof(SharedMemoryBlock),
         PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
-    if (shm == MAP_FAILED) { perror("[HIP] mmap"); return 1; }
 
-    std::cout << "[HIP] Attached to shared memory\n";
+    // ── One window, lives forever ─────────────────────────────────────────
+    sf::RenderWindow window(
+        sf::VideoMode((unsigned)WIN_W, (unsigned)WIN_H),
+        "Chrono Rift", sf::Style::Titlebar | sf::Style::Close);
 
-    // ── PHASE 2: Run menu — blocks until user confirms party ─────────────────
-    sf::RenderWindow menuWindow(
-        sf::VideoMode((unsigned)MENU_WIN_W, (unsigned)MENU_WIN_H),
-        "Chrono Rift");
-
-    GameMenu menu(menuWindow,
-                  "../MapsNScreen/MenuScreen.jpg",
-                  "../MapsNScreen/Map_Overlay.png");
-
-    PartyConfig party = menu.run();   // blocks until DONE or window closed
-
-    if (!party.valid())
-    {
-        std::cout << "[HIP] No party selected — exiting\n";
-        munmap(shm, sizeof(SharedMemoryBlock));
-        return 0;
-    }
-
-    // menuWindow destructs here — SFML closes it before renderer opens
-
-    // ── Terminal verification ─────────────────────────────────────────────────
-    std::cout << "[HIP] Party confirmed: " << party.numPlayers() << " players\n";
-    for (int i = 0; i < party.numPlayers(); i++)
-        std::cout << "  Player " << i << " = " << typeName(party.players[i]) << "\n";
-    std::cout << "  Level selected = " << party.selectedLevel << "\n";
-
-    // ── PHASE 3: Build HIPContext from party ──────────────────────────────────
+    // ── Context + Renderer ────────────────────────────────────────────────
     HIPContext ctx;
-    ctx.shm        = shm;
-    ctx.renderer   = nullptr;
-    ctx.numPlayers = party.numPlayers();
-    ctx.running    = 1;
+    ctx.shm      = shm;
+    ctx.running  = 1;
     pthread_mutex_init(&ctx.running_mutex, nullptr);
 
-    for (int i = 0; i < ctx.numPlayers; i++)
-        ctx.playerTypes[i] = party.players[i];
-
-    // ── PHASE 4: Handshake with Arbiter ──────────────────────────────────────
-    pthread_t setupTid;
-    pthread_create(&setupTid, nullptr, setupThread, &ctx);
-    pthread_join(setupTid, nullptr);
-    std::cout << "[HIP] Setup complete — Arbiter acknowledged\n";
-
-    // ── PHASE 5: Open game window + spawn player threads ─────────────────────
     Map map(0.0f, 0.0f, 860, 800);
-    map.loadScreens({ "../MapsNScreen/Fiaona'aForest_Lvl_tile1.png", "../MapsNScreen/Fiaona'aForest_Lvl_tile2.png" });
+    map.loadScreens({ "../MapsNScreen/Fiaona'aForest_Lvl_tile1.png" });
 
-    Renderer renderer(shm, &map);
+    Renderer renderer( shm, &map, &window );
     ctx.renderer = &renderer;
 
+    // ── Wire callbacks ────────────────────────────────────────────────────
     renderer.setActionCallback([&ctx](Action act, int tgt, int wpn)
     {
         submitAction(&ctx, act, tgt, wpn);
     });
 
-    spawnPlayerThreads(&ctx);
+    // Party ready callback — fires AFTER menu, BEFORE game loop
+    renderer.setPartyReadyCallback([&ctx](const PartyConfig& party)
+    {
+        ctx.numPlayers = party.numPlayers();
+        for (int i = 0; i < ctx.numPlayers; i++)
+            ctx.playerTypes[i] = party.players[i];
 
-    pthread_t renderTid;
-    pthread_create(&renderTid, nullptr, renderThread, &ctx);
-    pthread_join(renderTid, nullptr);   // blocks until window closes
+        // Handshake with arbiter
+        pthread_t setupTid;
+        pthread_create(&setupTid, nullptr, setupThread, &ctx);
+        pthread_join(setupTid, nullptr);
+        std::cout << "[HIP] Setup complete\n";
 
-    // ── PHASE 6: Cleanup ──────────────────────────────────────────────────────
+        // Spawn player threads now that shm is populated
+        spawnPlayerThreads(&ctx);
+    });
+
+    // ── renderer.run() handles menu → game → everything ──────────────────
+    renderer.run();   // ← ONE call, on main thread, no GLX conflict
+
+    // ── Cleanup ───────────────────────────────────────────────────────────
+    set_running(&ctx, 0);
+    for (int i = 0; i < ctx.numPlayers; i++)
+        pthread_cond_broadcast(&ctx.slots[i].cond);
+    pthread_mutex_lock(&shm->global_mutex);
+    pthread_cond_broadcast(&shm->turn_condition);
+    pthread_mutex_unlock(&shm->global_mutex);
+
     joinAndCleanup(&ctx);
     pthread_mutex_destroy(&ctx.running_mutex);
     munmap(shm, sizeof(SharedMemoryBlock));
-
     std::cout << "[HIP] Clean exit\n";
     return 0;
 }

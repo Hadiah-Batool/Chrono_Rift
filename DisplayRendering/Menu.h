@@ -10,7 +10,7 @@
 using std::vector;
 using std::string;
 
-constexpr float MENU_WIN_W = 1200.f;
+constexpr float MENU_WIN_W = 1280.f;
 constexpr float MENU_WIN_H = 800.f;
 
 enum class MenuOption { StartGame, LevelSelect, Options, Exit, None };

@@ -14,8 +14,8 @@
 #include "../shared/shared_types.h"
 #include "EnemyRenderer.h"
 #include <signal.h>
-#include <unistd.h>   // for getppid()
-
+#include <unistd.h>   
+#include "Menu.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ACTION CONSTANTS
@@ -118,10 +118,11 @@ public:
     enum class SidebarMode { ENEMIES, INVENTORY, BACKPACK };
 
 // Constructor A (SHM mode)
-Renderer(SharedMemoryBlock* block, Map* map)
+Renderer(SharedMemoryBlock* block, Map* map, sf::RenderWindow* window)
     : m_block(block)
     , m_shm(block ? &block->state : nullptr)
     , m_map(map)
+    , m_window(window)
     , m_sidebarMode(SidebarMode::ENEMIES)
     , m_lastSublevel(1)    //  ADD
 {
@@ -129,24 +130,28 @@ Renderer(SharedMemoryBlock* block, Map* map)
     pthread_mutex_init(&m_stopMutex, nullptr);
 }
 
-
-// Constructor B (local/test mode)
-Renderer(std::vector<Player*> players, std::vector<Character*> enemies, Map* map)
-    : m_localPlayers(std::move(players))
-    , m_localEnemies(std::move(enemies))
-    , m_map(map)
-    , m_sidebarMode(SidebarMode::ENEMIES)
+// in Renderer public:
+void setPartyReadyCallback(std::function<void(const PartyConfig&)> cb)
 {
-    m_parentPid = getppid();   //  ADD THIS
-    pthread_mutex_init(&m_stopMutex, nullptr);
-    std::cout << "[Renderer] Created in local mode\n";
+    m_partyReadyCallback = cb;
 }
 
+// in Renderer private members:
+std::function<void(const PartyConfig&)> m_partyReadyCallback;
 
-    ~Renderer()
-    {
-        pthread_mutex_destroy(&m_stopMutex);
-    }
+
+
+void setGameOverCallback(std::function<void(bool fullExit)> cb)
+{
+    m_gameOverCallback = cb;
+}
+
+// in Renderer private:
+enum class GameExitReason { NONE, QUIT_TO_MENU, FULL_EXIT, GAME_OVER };
+GameExitReason m_exitReason = GameExitReason::NONE;
+
+// in Renderer private:
+std::function<void(bool)> m_gameOverCallback;
 
     Renderer(const Renderer&)            = delete;
     Renderer& operator=(const Renderer&) = delete;
@@ -180,38 +185,99 @@ Renderer(std::vector<Player*> players, std::vector<Character*> enemies, Map* map
         pthread_mutex_unlock(&m_stopMutex);
     }
 
-    // Blocks until window closes — called from renderThread in hip.cpp
-    void run()
+void run()
+{
+    m_window->setFramerateLimit(60);
+    loadAssets();   // font + weapons — once only
+
+    // ── Outer loop: MENU → GAME → MENU → GAME ... ────────────────────────
+    while (m_window->isOpen())
     {
-        m_window.create(
-            sf::VideoMode((unsigned)WIN_W, (unsigned)WIN_H),
-            "Chrono Rift",
-            sf::Style::Titlebar | sf::Style::Close
-        );
-                // spin until arbiter has populated enemies (non-blocking poll)
-        while (m_shm->num_active_enemies == 0)
+        // ── MENU PHASE ───────────────────────────────────────────────────
+        GameMenu menu(*m_window,
+                      "../MapsNScreen/MenuScreen.jpg",
+                      "../MapsNScreen/Map_Overlay.png");
+
+        m_party = menu.run();
+
+        if (!m_party.valid() || !m_window->isOpen())
+        {
+            std::cout << "[Renderer] Exited from menu\n";
+            break;
+        }
+
+        // ── Notify HIP — spawns player threads + does arbiter handshake ──
+        if (m_partyReadyCallback)
+            m_partyReadyCallback(m_party);
+
+        // ── Load player sprites now that shm has players ──────────────────
+        loadPlayerSprites();
+
+        // ── Wait for arbiter to populate enemies ──────────────────────────
+        while (m_shm && m_shm->num_active_enemies == 0 && m_window->isOpen())
             sf::sleep(sf::milliseconds(10));
-        m_window.setFramerateLimit(60);
-        loadAssets();
-        std::cout << "[Renderer] Window open — entering game loop\n";
+
+        if (!m_window->isOpen()) break;
+
         loadEnemyRenderers();
-        while (m_window.isOpen())
+
+        // ── Reset per-game state ──────────────────────────────────────────
+        m_stop       = false;
+        m_exitReason = GameExitReason::NONE;
+        m_selectedEnemy  = 0;
+        m_selectedWeapon = 0;
+        m_popups.clear();
+        m_logExpanded = false;
+        // reset HP snapshots so popups don't fire on first frame
+        for (int i = 0; i < 4; i++) m_prevPlayerHp[i] = -1;
+        for (int i = 0; i < 9; i++) m_prevEnemyHp[i]  = -1;
+
+        std::cout << "[Renderer] Entering game loop\n";
+
+        // ── GAME LOOP ─────────────────────────────────────────────────────
+        while (m_window->isOpen())
         {
             pthread_mutex_lock(&m_stopMutex);
             bool stop = m_stop;
             pthread_mutex_unlock(&m_stopMutex);
-            if (stop) { m_window.close(); break; }
-            float dt = m_clock.restart().asSeconds();  
+            if (stop) break;
+
+            // Also check shm game_running for natural game over
+            if (m_shm && !m_shm->game_running)
+            {
+                m_exitReason = GameExitReason::GAME_OVER;
+                break;
+            }
+
+            float dt = m_clock.restart().asSeconds();
             handleEvents();
-            m_window.clear(Colour::SidebarBg);
+            m_window->clear(Colour::SidebarBg);
             drawAll(dt);
-            
-           
-            m_window.display();
+            m_window->display();
         }
 
-        std::cout << "[Renderer] Game loop exited\n";
+        std::cout << "[Renderer] Game loop exited — reason: "
+                  << (int)m_exitReason << "\n";
+
+        // ── Notify HIP about exit so it can cleanup threads ───────────────
+        if (m_gameOverCallback)
+            m_gameOverCallback(m_exitReason == GameExitReason::FULL_EXIT);
+
+        // Full exit — close everything
+        if (m_exitReason == GameExitReason::FULL_EXIT
+         || !m_window->isOpen())
+            break;
+
+        // QUIT_TO_MENU or GAME_OVER — show result briefly then loop back
+        if (m_exitReason == GameExitReason::GAME_OVER)
+            showGameOverScreen();   // optional, see below
+
+        // loop back to menu
+        std::cout << "[Renderer] Returning to menu\n";
     }
+
+    std::cout << "[Renderer] Renderer::run() exited\n";
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 private:
@@ -242,7 +308,7 @@ private:
     int m_selectedWeapon = 0;
 
     // SFML
-    sf::RenderWindow m_window;
+    sf::RenderWindow* m_window = nullptr;
     sf::Font         m_font;
     bool             m_fontLoaded = false;
     sf::Clock        m_clock;
@@ -270,9 +336,21 @@ private:
     // ── Add to private members ────────────────────────────────────────────────
     int m_lastSublevel = 1;
 
+    bool m_quitToMenu = false;
+
     // ─────────────────────────────────────────────────────────────────────────
 //  Floating damage numbers
 // ─────────────────────────────────────────────────────────────────────────
+
+    enum class AppState { MENU, GAME, GAMEOVER };
+    AppState m_appState = AppState::MENU;
+    
+    // Menu assets (moved from GameMenu)
+    GameMenu* m_menu = nullptr;   // we'll construct it internally
+    PartyConfig m_party;
+    bool m_partyReady = false;
+
+
 struct DmgPopup
 {
     std::string text;
@@ -581,7 +659,7 @@ ArtifactUIState getArtifactState(int art_idx) const
             { "Frostbow",       "../Weapons_sprites/Frost_Bow.png"       },
             { "Splinter Stick", "../Weapons_sprites/Splinster_Stick.png" },
         };
-        loadPlayerSprites();
+        
         for (auto& e : weaponPaths)
         {
             sf::Texture tex;
@@ -656,7 +734,7 @@ void drawArtifactBanners()
             icon.setPosition(6.f, bannerY + 3.f);
             icon.setScale(22.f / icon.getTexture()->getSize().x,
                           22.f / icon.getTexture()->getSize().y);
-            m_window.draw(icon);
+            m_window->draw(icon);
             textX = 34.f;
         }
 
@@ -710,17 +788,15 @@ void drawArtifactBanners()
     void handleEvents()
     {
         sf::Event e{};
-        while (m_window.pollEvent(e))
+        while (m_window->pollEvent(e))
         {
-        if (e.type == sf::Event::Closed)
-        {
-            std::cout << "[Renderer] Window close requested — sending SIGTERM to parent "
-                    << m_parentPid << "\n";
-            requestStop();
-            m_window.close();
-            if (m_parentPid > 0)
+            if (e.type == sf::Event::Closed)
+            {
+                m_exitReason = GameExitReason::FULL_EXIT;
+                requestStop();
+                m_window->close();
                 kill(m_parentPid, SIGTERM);
-        }
+            }
 
 
             if (e.type == sf::Event::KeyPressed)
@@ -804,7 +880,13 @@ void drawArtifactBanners()
                         fireCallback(Action::ULTIMATE, -1, -1);
                         break;
                     }
-
+                    // in handleEvents KeyPressed switch:
+                    case sf::Keyboard::M:
+                    {    std::cout << "[Renderer] M pressed — returning to menu\n";
+                        m_exitReason = GameExitReason::QUIT_TO_MENU;
+                        requestStop();
+                        break;
+                    }
 
                     case sf::Keyboard::Down:
                     {
@@ -900,7 +982,7 @@ void drawArtifactBanners()
 
         if (clicked)
         {
-            sf::Vector2i mp = sf::Mouse::getPosition(m_window);
+            sf::Vector2i mp = sf::Mouse::getPosition(*m_window);
             float mx = (float)mp.x;
             float my = (float)mp.y;
 
@@ -964,7 +1046,7 @@ void drawDeadEnemyMarkers()
                 drop.setPosition(ex - 16.f, ey + 14.f);
                 drop.setScale(32.f / drop.getTexture()->getSize().x,
                               32.f / drop.getTexture()->getSize().y);
-                m_window.draw(drop);
+                m_window->draw(drop);
             }
             else
             {
@@ -1033,7 +1115,7 @@ void drawAll(float dt)
     }
 
     // ── map + characters ──────────────────────────────────────────────────
-    if (m_map) m_map->draw(m_window);
+    if (m_map) m_map->draw(*m_window);
     else        std::cerr << "[Renderer] Map pointer is null\n";
 
         // 1. Detect HP changes FIRST — spawns popups/highlights for this frame
@@ -1041,7 +1123,7 @@ void drawAll(float dt)
 
     // 2. Then draw players/enemies on top of highlights, so they appear under the ring
     drawPlayers();
-    updateAndDrawEnemies(m_window, dt);
+    updateAndDrawEnemies(*m_window, dt);
     drawDeadEnemyMarkers(); 
 
     //3. Then like the popups
@@ -1279,7 +1361,7 @@ void drawPlayers()
 
         m_playerSprites[i].setPosition(x, y);
         m_playerSprites[i].setScale(sx, sy);
-        m_window.draw(m_playerSprites[i]);
+        m_window->draw(m_playerSprites[i]);
     }
 }
 
@@ -1475,10 +1557,12 @@ std::string hud =
 
         for (int i = start; i < log.count; i++)
         {
-            int       idx  = (log.head + i) % ACTION_LOG_SIZE;
-            int       age  = log.count - 1 - i;          // 0 = newest
-            float     t    = 1.f - (float)age / (float)std::max(1, maxLines - 1);
-            sf::Uint8 a    = (sf::Uint8)(80 + 175 * t);  // older = more faded
+            // head - count = oldest entry, + i walks forward
+            int idx = (log.head - log.count + i + ACTION_LOG_SIZE) % ACTION_LOG_SIZE;
+            
+            int       age = log.count - 1 - i;
+            float     t   = 1.f - (float)age / (float)std::max(1, maxLines - 1);
+            sf::Uint8 a   = (sf::Uint8)(80 + 175 * t);
 
             drawText(log.messages[idx],
                     SB_X + PAD, lineY,
@@ -1488,6 +1572,37 @@ std::string hud =
 
         if (m_logExpanded) drawLogOverlay(log);
     }
+
+    void showGameOverScreen()
+{
+    bool won = m_shm && m_shm->game_result;
+    sf::Clock timer;
+
+    while (m_window->isOpen() && timer.getElapsedTime().asSeconds() < 4.f)
+    {
+        sf::Event ev{};
+        while (m_window->pollEvent(ev))
+        {
+            if (ev.type == sf::Event::Closed)
+            { m_window->close(); return; }
+            if (ev.type == sf::Event::KeyPressed)
+            { return; }   // any key skips the screen
+        }
+
+        m_window->clear(sf::Color(10, 10, 20));
+        drawRect(0.f, 0.f, WIN_W, WIN_H, sf::Color(0, 0, 0, 180));
+
+        std::string title = won ? "VICTORY!" : "DEFEATED";
+        sf::Color   col   = won ? sf::Color(80, 220, 80)
+                                : sf::Color(220, 60, 60);
+
+        drawText(title,   WIN_W / 2.f - 80.f, WIN_H / 2.f - 40.f, FONT_XL, col);
+        drawText("Returning to menu...",
+                 WIN_W / 2.f - 100.f, WIN_H / 2.f + 20.f,
+                 FONT_MD, Colour::TxtMuted);
+        m_window->display();
+    }
+}
 
 
     void drawLogOverlay(ActionLog& log)
@@ -1667,7 +1782,7 @@ void drawDroppedWeaponBanner()
         icon.setPosition(6.f, BANNER_Y + 3.f);
         icon.setScale(22.f / icon.getTexture()->getSize().x,
                       22.f / icon.getTexture()->getSize().y);
-        m_window.draw(icon);
+        m_window->draw(icon);
         textX = 34.f;   // push text right of icon
     }
 
@@ -1742,7 +1857,7 @@ void drawWeaponPanel(const std::vector<Weapon>& weapons, const char* header)
                 ICON_SZ / icon.getTexture()->getSize().x,
                 ICON_SZ / icon.getTexture()->getSize().y
             );
-            m_window.draw(icon);
+            m_window->draw(icon);
         }
         else
         {
@@ -1842,7 +1957,7 @@ void drawBackpackPanel()
         t.setCharacterSize(size);
         t.setFillColor(col);
         t.setPosition(x, y);
-        m_window.draw(t);
+        m_window->draw(t);
     }
 
     void drawRect(float x, float y, float w, float h,
@@ -1855,7 +1970,7 @@ void drawBackpackPanel()
         r.setFillColor(fill);
         r.setOutlineColor(outline);
         r.setOutlineThickness(outlineThick);
-        m_window.draw(r);
+        m_window->draw(r);
     }
 };
 
