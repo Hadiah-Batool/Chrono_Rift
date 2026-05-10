@@ -30,17 +30,16 @@ using std::array;
 #define time_of_response 3
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  GLOBALS (Defined in arbiter.cpp)
+//  GLOBALS
 // ─────────────────────────────────────────────────────────────────────────────
 extern pid_t g_asp_pid;
 extern SharedMemoryBlock* g_shm_ptr;
 extern volatile sig_atomic_t g_sigalrm_received;
 extern volatile sig_atomic_t g_sigterm_received;
-extern bool g_ultimate_active; // <--- The Ultimate Flag
+extern bool g_ultimate_active; // The Ultimate Flag
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ARTIFACT HELPER SECTION (Requires resource_table_mutex lock)
-// ─────────────────────────────────────────────────────────────────────────────
+//  ARTIFACT HELPER SECTION
 
 static inline int find_artifact_idx(SharedMemoryBlock* sb, int weapon_id) {
     for (int i = 0; i < sb->state.num_artifacts; ++i)
