@@ -322,8 +322,9 @@ int main(int argc, char* argv[])
 
     // ── Context + Renderer ────────────────────────────────────────────────
     HIPContext ctx;
-    ctx.shm      = shm;
-    ctx.running  = 1;
+    ctx.shm        = shm;
+    ctx.running    = 1;
+    ctx.numPlayers = 0;  // <--- ADD THIS LINE!
     pthread_mutex_init(&ctx.running_mutex, nullptr);
 
     Map map(0.0f, 0.0f, 860, 800);
@@ -370,5 +371,8 @@ int main(int argc, char* argv[])
     pthread_mutex_destroy(&ctx.running_mutex);
     munmap(shm, sizeof(SharedMemoryBlock));
     std::cout << "[HIP] Clean exit\n";
+
+    // --- ADD THIS: Tell the Arbiter (Parent Process) to shut down! ---
+    kill(getppid(), SIGTERM);
     return 0;
 }

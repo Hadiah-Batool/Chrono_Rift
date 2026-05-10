@@ -36,6 +36,7 @@ extern pid_t g_asp_pid;
 extern SharedMemoryBlock* g_shm_ptr;
 extern volatile sig_atomic_t g_sigalrm_received;
 extern volatile sig_atomic_t g_sigterm_received;
+extern bool g_ultimate_active; // <--- The Ultimate Flag
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ARTIFACT HELPER SECTION (Requires resource_table_mutex lock)
@@ -84,7 +85,6 @@ static inline bool try_grant_artifact_to_enemy(SharedMemoryBlock* sb, int enemy_
     return true;
 }
 
-// --- ADD THIS HELPER TO UNFREEZE WAITING ENTITIES ---
 static inline void wake_waiters_for_artifact(SharedMemoryBlock* sb, int art_idx) {
     for(int p = 0; p < sb->state.num_active_players; ++p) {
         if (sb->state.players_artifact_state[p].waiting_for_artifact_idx == art_idx)
@@ -104,7 +104,7 @@ static inline void release_artifact_from_player(SharedMemoryBlock* sb, int playe
     sb->state.players_artifact_state[player_idx].waiting_for_artifact_idx = -1;
     std::cout << "[ARBITER][ARTIFACT] Player " << player_idx << " released artifact " << art_idx << "\n";
 
-    wake_waiters_for_artifact(sb, art_idx); // <--- AWAKENS EVERYONE WAITING FOR IT
+    wake_waiters_for_artifact(sb, art_idx);
     pthread_cond_broadcast(&sb->turn_condition);
 }
 
@@ -116,7 +116,7 @@ static inline void release_artifact_from_enemy(SharedMemoryBlock* sb, int enemy_
     sb->state.enemies_artifact_state[enemy_idx].waiting_for_artifact_idx = -1;
     std::cout << "[ARBITER][ARTIFACT] Enemy " << enemy_idx << " released artifact " << art_idx << "\n";
 
-    wake_waiters_for_artifact(sb, art_idx); // <--- AWAKENS EVERYONE WAITING FOR IT
+    wake_waiters_for_artifact(sb, art_idx);
     pthread_cond_broadcast(&sb->turn_condition);
 }
 
@@ -264,19 +264,23 @@ public:
                     *out_turn_index = i; *out_turn = true; return;
                 }
             }
-            for(int i = 0; i < num_enemies; ++i) {
-                if (!shared_block->state.enemies[i].isAlive() || shared_block->state.enemies[i].isStunned() ||
-                    shared_block->state.enemies_artifact_state[i].waiting_for_artifact_idx != -1) continue;
-                if(shared_block->state.enemies[i].getStamina() >= shared_block->state.enemies[i].getMaxStamina()) {
-                    *out_turn_index = num_players + i; *out_turn = false; return;
+            if (!g_ultimate_active) {
+                for(int i = 0; i < num_enemies; ++i) {
+                    if (!shared_block->state.enemies[i].isAlive() || shared_block->state.enemies[i].isStunned() ||
+                        shared_block->state.enemies_artifact_state[i].waiting_for_artifact_idx != -1) continue;
+                    if(shared_block->state.enemies[i].getStamina() >= shared_block->state.enemies[i].getMaxStamina()) {
+                        *out_turn_index = num_players + i; *out_turn = false; return;
+                    }
                 }
             }
         } else {
-            for(int i = 0; i < num_enemies; ++i) {
-                if (!shared_block->state.enemies[i].isAlive() || shared_block->state.enemies[i].isStunned() ||
-                    shared_block->state.enemies_artifact_state[i].waiting_for_artifact_idx != -1) continue;
-                if(shared_block->state.enemies[i].getStamina() >= shared_block->state.enemies[i].getMaxStamina()) {
-                    *out_turn_index = num_players + i; *out_turn = false; return;
+            if (!g_ultimate_active) {
+                for(int i = 0; i < num_enemies; ++i) {
+                    if (!shared_block->state.enemies[i].isAlive() || shared_block->state.enemies[i].isStunned() ||
+                        shared_block->state.enemies_artifact_state[i].waiting_for_artifact_idx != -1) continue;
+                    if(shared_block->state.enemies[i].getStamina() >= shared_block->state.enemies[i].getMaxStamina()) {
+                        *out_turn_index = num_players + i; *out_turn = false; return;
+                    }
                 }
             }
             for(int i = 0; i < num_players; ++i) {
@@ -323,6 +327,7 @@ inline void* stamina_recovery(void* arg){
                 }
             }
             for (int i = 0; i < shared_block->state.num_active_enemies; ++i) {
+                if (g_ultimate_active) continue; // FREEZE ENEMY TIME
                 auto& enemy = shared_block->state.enemies[i];
                 if (enemy.isAlive()) {
                     if (enemy.isStunned() && current_turn >= enemy.getStunEndTem()) {
@@ -498,6 +503,8 @@ inline void handle_player_action(const ActionRequest& request, SharedMemoryBlock
             std::cout << "\n[ARBITER] *** Player " << attacker_id << " triggered the ULTIMATE ABILITY! ***\n";
             std::cout << "[ARBITER] *** Sending SIGSTOP to ASP. Enemies frozen for 10 seconds! ***\n\n";
             kill(g_asp_pid, SIGSTOP);
+
+            g_ultimate_active = true;
             alarm(10);
         } else {
             std::cout << "[ARBITER] Player " << attacker_id << " attempted Ultimate but lacks the required artifacts (Needs both Solar Core and Lunar Blade)!\n";
