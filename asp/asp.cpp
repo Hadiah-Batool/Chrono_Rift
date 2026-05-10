@@ -114,26 +114,28 @@ static void decide_action(int enemyIndex, SharedMemoryBlock* shm)
 
     // 2. TACTIC: Actively Hunt for Artifacts!
     // If we don't have an artifact, check if any of the 3 are lying on the ground.
-    if (shm->state.enemies_artifact_state[enemyIndex].holding_artifact_idx == -1) {
-        int desired_artifact = -1;
-        // Check backwards (2 to 0) so Eclipse Relic is highest priority
-        for (int a = 2; a >= 0; --a) {
-            if (shm->state.artifacts[a].isAvailable()) {
-                desired_artifact = a;
-                break;
+    /* Temporarily commenting out enemy artifact pickup logic for testing purposes
+        if (shm->state.enemies_artifact_state[enemyIndex].holding_artifact_idx == -1) {
+            int desired_artifact = -1;
+            // Check backwards (2 to 0) so Eclipse Relic is highest priority
+            for (int a = 2; a >= 0; --a) {
+                if (shm->state.artifacts[a].isAvailable()) {
+                    desired_artifact = a;
+                    break;
+                }
+            }
+
+            // 80% chance to drop everything and grab the artifact if it's there
+            if (desired_artifact != -1 && (rand() % 100 < 80)) {
+                shm->asp_mailbox.action_type          = Action::GET_ARTIFACT;
+                shm->asp_mailbox.requesting_entity_id = enemyIndex;
+                shm->asp_mailbox.weapon_id            = shm->state.artifacts[desired_artifact].getWeaponId();
+                shm->asp_mailbox.is_ready             = true;
+                std::cout << "[ASP] TACTIC: Enemy " << enemyIndex << " is lunging for an Artifact!\n";
+                return;
             }
         }
-
-        // 80% chance to drop everything and grab the artifact if it's there
-        if (desired_artifact != -1 && (rand() % 100 < 80)) {
-            shm->asp_mailbox.action_type          = Action::GET_ARTIFACT;
-            shm->asp_mailbox.requesting_entity_id = enemyIndex;
-            shm->asp_mailbox.weapon_id            = shm->state.artifacts[desired_artifact].getWeaponId();
-            shm->asp_mailbox.is_ready             = true;
-            std::cout << "[ASP] TACTIC: Enemy " << enemyIndex << " is lunging for an Artifact!\n";
-            return;
-        }
-    }
+    */
 
     // 3. TACTIC: Stand Guard / Hesitate
     // 10% chance to just guard (SKIP) to preserve 50% stamina and act again faster
