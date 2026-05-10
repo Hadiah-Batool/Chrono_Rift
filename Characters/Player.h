@@ -203,6 +203,7 @@ public:
         else completed_section = true;
 
         return false;
+        usleep(50000); // Sleep for 100ms to simulate time passage (adjust as needed)
     }
 
     std::deque<std::pair<float, float>> getPath(int level, int round)
