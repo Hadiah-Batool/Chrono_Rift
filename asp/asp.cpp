@@ -81,23 +81,30 @@ static void onSigterm(int)
 // ─────────────────────────────────────────────────────────────────────────────
 //  decide_action — Enemy AI
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  decide_action — Smart Heuristic Enemy AI
+// ─────────────────────────────────────────────────────────────────────────────
 static void decide_action(int enemyIndex, SharedMemoryBlock* shm)
 {
-    if (rand() % 100 < 10) {
-        shm->asp_mailbox.action_type          = Action::SKIP;
-        shm->asp_mailbox.requesting_entity_id = enemyIndex;
-        shm->asp_mailbox.is_ready             = true;
-        std::cout << "[ASP] Enemy " << enemyIndex << " chose to SKIP its turn.\n";
-        return;
-    }
-
+    // 1. Identify available targets and find the weakest link
     int numPlayers = shm->state.num_active_players;
     int alivePlayers[4];
     int aliveCount = 0;
-    for (int i = 0; i < numPlayers; i++)
-        if (shm->state.players[i].isAlive())
-            alivePlayers[aliveCount++] = i;
 
+    int weakestPlayerIdx = -1;
+    int lowestHP = 999999;
+
+    for (int i = 0; i < numPlayers; i++) {
+        if (shm->state.players[i].isAlive()) {
+            alivePlayers[aliveCount++] = i;
+            if (shm->state.players[i].getHp() < lowestHP) {
+                lowestHP = shm->state.players[i].getHp();
+                weakestPlayerIdx = i;
+            }
+        }
+    }
+
+    // Edge case: everyone is dead
     if (aliveCount == 0) {
         shm->asp_mailbox.action_type          = Action::SKIP;
         shm->asp_mailbox.requesting_entity_id = enemyIndex;
@@ -105,13 +112,53 @@ static void decide_action(int enemyIndex, SharedMemoryBlock* shm)
         return;
     }
 
-    int target = alivePlayers[rand() % aliveCount];
+    // 2. TACTIC: Actively Hunt for Artifacts!
+    // If we don't have an artifact, check if any of the 3 are lying on the ground.
+    if (shm->state.enemies_artifact_state[enemyIndex].holding_artifact_idx == -1) {
+        int desired_artifact = -1;
+        // Check backwards (2 to 0) so Eclipse Relic is highest priority
+        for (int a = 2; a >= 0; --a) {
+            if (shm->state.artifacts[a].isAvailable()) {
+                desired_artifact = a;
+                break;
+            }
+        }
+
+        // 80% chance to drop everything and grab the artifact if it's there
+        if (desired_artifact != -1 && (rand() % 100 < 80)) {
+            shm->asp_mailbox.action_type          = Action::GET_ARTIFACT;
+            shm->asp_mailbox.requesting_entity_id = enemyIndex;
+            shm->asp_mailbox.weapon_id            = shm->state.artifacts[desired_artifact].getWeaponId();
+            shm->asp_mailbox.is_ready             = true;
+            std::cout << "[ASP] TACTIC: Enemy " << enemyIndex << " is lunging for an Artifact!\n";
+            return;
+        }
+    }
+
+    // 3. TACTIC: Stand Guard / Hesitate
+    // 10% chance to just guard (SKIP) to preserve 50% stamina and act again faster
+    if (rand() % 100 < 10) {
+        shm->asp_mailbox.action_type          = Action::SKIP;
+        shm->asp_mailbox.requesting_entity_id = enemyIndex;
+        shm->asp_mailbox.is_ready             = true;
+        std::cout << "[ASP] TACTIC: Enemy " << enemyIndex << " stands its ground (SKIP).\n";
+        return;
+    }
+
+    // 4. TACTIC: Execute Combat
+    // Default to striking the weakest player to eliminate threats quickly.
+    int target = weakestPlayerIdx;
+
+    // Occasionally (30% chance) strike a random player to add unpredictability
+    if (rand() % 100 < 30) {
+        target = alivePlayers[rand() % aliveCount];
+    }
+
     shm->asp_mailbox.action_type          = Action::STRIKE;
     shm->asp_mailbox.requesting_entity_id = enemyIndex;
     shm->asp_mailbox.target_id            = target;
     shm->asp_mailbox.is_ready             = true;
 }
-
 // ─────────────────────────────────────────────────────────────────────────────
 //  enemyThreadFunc — one per enemy
 // ─────────────────────────────────────────────────────────────────────────────
