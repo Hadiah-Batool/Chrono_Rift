@@ -507,6 +507,19 @@ ArtifactUIState getArtifactState(int art_idx) const
         return m_localEnemies[i] ? m_localEnemies[i]->getMaxHp() : 1;
     }
 
+    int getEnemyStamina(int i) const
+    {
+        if (isShmMode()) return m_shm->enemies[i].getStamina();
+        return m_localEnemies[i] ? m_localEnemies[i]->getStamina() : 0;
+    }
+
+    int getEnemyMaxStamina(int i) const
+    {
+        if (isShmMode()) return m_shm->enemies[i].getMaxStamina();
+        return m_localEnemies[i] ? m_localEnemies[i]->getMaxStamina() : 1;
+    }
+
+
     bool getEnemyStunned(int i) const
     {
         if (isShmMode()) return m_shm->enemies[i].isStunned();
@@ -785,6 +798,13 @@ void drawArtifactBanners()
                         }
                         break;
                     }
+                    case sf::Keyboard::U:
+                    {
+                        std::cout << "[Renderer] U -> ULTIMATE\n";
+                        fireCallback(Action::ULTIMATE, -1, -1);
+                        break;
+                    }
+
 
                     case sf::Keyboard::Down:
                     {
@@ -1300,8 +1320,9 @@ void drawHUD()
 
     drawRect(0.f, WIN_H - 26.f, MAP_W, 26.f, sf::Color(0, 0, 0, 200));
 
-    std::string hud =
-        "SPACE=Strike  W=Weapon  E=Exhaust  H=Heal  TAB=Swap  ESC=Skip  </>=Target  ^/v=Weapon";
+std::string hud =
+    "SPACE=Strike  W=Weapon  U=Ultimate  E=Exhaust  H=Heal  TAB=Swap  ESC=Skip  </>=Target  ^/v=Weapon";
+
 
     if (isShmMode() && m_shm->is_weapon_dropped)
         hud += "   *** P=PICKUP ***";
@@ -1310,7 +1331,7 @@ void drawHUD()
         ? sf::Color(255, 215, 50, 255)   // gold when pickup available
         : Colour::TxtMuted;              // grey normally
 
-    drawText(hud, 8.f, WIN_H - 22.f, FONT_XS, hintCol);
+    drawText(hud, 8.f, WIN_H - 22.f, FONT_SM, hintCol);
 }
 
 
@@ -1532,7 +1553,6 @@ void drawEnemySection()
 
     int count = totalEnemyCount();
 
-    // Header with count
     drawText("ENEMIES  [" + std::to_string(aliveEnemyCount())
              + "/" + std::to_string(count) + " alive]",
              SB_X + PAD, PANEL_Y + 4.f, FONT_XS, Colour::TxtMuted);
@@ -1543,12 +1563,11 @@ void drawEnemySection()
         return;
     }
 
-    // Dynamic card height — shrink if many enemies
-    int   visible  = count;
-    float maxH     = PANEL_H - 22.f;
-    float cardH    = std::min(ENEMY_CARD_H,
-                              (maxH - (visible - 1) * ENEMY_CARD_GAP) / (float)visible);
-    cardH          = std::max(cardH, 44.f);   // never smaller than 44px
+    // Dynamic card height — needs more room now for stamina bar
+    float maxH  = PANEL_H - 22.f;
+    float cardH = std::min(ENEMY_CARD_H,
+                           (maxH - (count - 1) * ENEMY_CARD_GAP) / (float)count);
+    cardH = std::max(cardH, 58.f);   // minimum 58px to fit both bars
 
     float cardY = PANEL_Y + 22.f;
 
@@ -1576,33 +1595,52 @@ void drawEnemySection()
         sf::Color nameCol  = alive ? Colour::TxtPrimary : Colour::TxtMuted;
         drawText(prefix + getEnemyName(i), tx, ty, FONT_SM, nameCol);
 
-        // ── Status badge (right side) ─────────────────────────────────────
+        // ── Status badge ──────────────────────────────────────────────────
         drawStatusBadge(SB_X + SB_W - PAD - 72.f, ty, alive, stunned);
-
         ty += 20.f;
 
-        // ── HP bar — only if card is tall enough ──────────────────────────
-        if (cardH >= 44.f)
+        if (cardH >= 44.f && alive)
         {
+            float barW = cw - 12.f;
+
+            // ── HP bar ────────────────────────────────────────────────────
             int hp    = getEnemyHp(i);
             int maxhp = std::max(1, getEnemyMaxHp(i));
 
-            sf::Color eHpCol = !alive   ? Colour::DeadBadge
-                             : stunned  ? Colour::StunBadge
-                             : ((float)hp / maxhp < 0.3f ? Colour::HpLow : Colour::HpFull);
+            sf::Color eHpCol = stunned
+                ? Colour::StunBadge
+                : ((float)hp / maxhp < 0.3f ? Colour::HpLow : Colour::HpFull);
 
-            // HP numbers inline
-            drawText(std::to_string(hp) + "/" + std::to_string(maxhp),
-                     tx, ty, FONT_XS, Colour::TxtMuted);
+            drawText("HP " + std::to_string(hp) + "/" + std::to_string(maxhp),
+                     tx, ty, FONT_XS - 1, Colour::TxtMuted);
             ty += 13.f;
+            drawBar(tx, ty, barW, 7.f, hp, maxhp, Colour::HpBack, eHpCol);
+            ty += 11.f;
 
-            float barW = cw - 12.f;
-            drawBar(tx, ty, barW, 8.f, hp, maxhp, Colour::HpBack, eHpCol);
+            // ── Stamina bar ───────────────────────────────────────────────
+            int stam    = getEnemyStamina(i);
+            int maxstam = std::max(1, getEnemyMaxStamina(i));
+
+            // Colour: full stamina = about to act (orange warning), else blue
+            sf::Color stamCol = (stam >= maxstam)
+                ? sf::Color(255, 160,  30, 255)   // orange = READY TO ACT
+                : Colour::StamFull;                // blue = recovering
+
+            drawText("STM " + std::to_string(stam) + "/" + std::to_string(maxstam),
+                     tx, ty, FONT_XS - 1, Colour::TxtMuted);
+            ty += 13.f;
+            drawBar(tx, ty, barW, 5.f, stam, maxstam, Colour::StamBack, stamCol);
+        }
+        else if (!alive)
+        {
+            // Dead enemy — just show DEAD text
+            drawText("-- DEFEATED --", tx, ty, FONT_XS, Colour::DeadBadge);
         }
 
         cardY += cardH + ENEMY_CARD_GAP;
     }
 }
+
 // ── Call this in drawAll() right after updateAndDrawEnemies() ────────────
 void drawDroppedWeaponBanner()
 {
