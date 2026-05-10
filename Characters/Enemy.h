@@ -4,7 +4,7 @@
 #include <string>
 #include <cmath>
 #include <iostream>
-#include "Characters.h"
+#include "Characters_header.h"
 // Enemy.h — top includes
 #include "../DisplayRendering/Animator.h"
 
