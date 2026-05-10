@@ -146,11 +146,14 @@ void setGameOverCallback(std::function<void(bool fullExit)> cb)
     m_gameOverCallback = cb;
 }
 
-// in Renderer private:
+
 enum class GameExitReason { NONE, QUIT_TO_MENU, FULL_EXIT, GAME_OVER };
 GameExitReason m_exitReason = GameExitReason::NONE;
+std::string m_ultimateFlashMsg   = "";
+float       m_ultimateFlashTimer = 0.f;
+bool        m_ultimateFailed     = false;
 
-// in Renderer private:
+
 std::function<void(bool)> m_gameOverCallback;
 
     Renderer(const Renderer&)            = delete;
@@ -876,10 +879,32 @@ void drawArtifactBanners()
                     }
                     case sf::Keyboard::U:
                     {
-                        std::cout << "[Renderer] U -> ULTIMATE\n";
+                        // Check locally if player has both artifacts before firing
+                        bool canUlt = false;
+                        if (isShmMode() && m_activeIdx >= 0 && m_activeIdx < m_shm->num_active_players)
+                        {
+                            const auto& inv = m_shm->players[m_activeIdx].getInventory();
+                            canUlt = inv.hasWeapon(0) && inv.hasWeapon(1);
+                        }
+
+                        if (canUlt)
+                        {
+                            m_ultimateFlashMsg   = "*** ULTIMATE ACTIVATED — Enemies frozen! ***";
+                            m_ultimateFlashTimer = 3.f;
+                            m_ultimateFailed     = false;
+                        }
+                        else
+                        {
+                            m_ultimateFlashMsg   = "Need Solar Core + Lunar Blade for Ultimate!";
+                            m_ultimateFlashTimer = 2.f;
+                            m_ultimateFailed     = true;
+                        }
+
+                        std::cout << "[Renderer] U -> ULTIMATE  canUlt=" << canUlt << "\n";
                         fireCallback(Action::ULTIMATE, -1, -1);
                         break;
                     }
+
                     // in handleEvents KeyPressed switch:
                     case sf::Keyboard::M:
                     {    std::cout << "[Renderer] M pressed — returning to menu\n";
@@ -1084,6 +1109,25 @@ void drawAll(float dt)
             m_activeTurnId   = owner;
             m_activeIsPlayer = false;
         }
+    }
+    // ── Ultimate flash ────────────────────────────────────────────────────
+    if (m_ultimateFlashTimer > 0.f)
+    {
+        m_ultimateFlashTimer -= dt;
+        sf::Uint8 alpha = (sf::Uint8)(255 * std::min(1.f, m_ultimateFlashTimer / 0.4f));
+
+        sf::Color bgCol  = m_ultimateFailed
+            ? sf::Color(80, 20, 20, alpha)        // red tint = failed
+            : sf::Color(80, 60,  0, alpha);       // gold tint = success
+
+        sf::Color txtCol = m_ultimateFailed
+            ? sf::Color(255, 80,  80, alpha)
+            : sf::Color(255, 220, 50, alpha);
+
+        drawRect(0.f, WIN_H / 2.f - 22.f, MAP_W, 44.f, bgCol);
+        drawText(m_ultimateFlashMsg,
+                20.f, WIN_H / 2.f - 14.f,
+                FONT_MD, txtCol);
     }
 
 
@@ -1894,14 +1938,22 @@ void drawWeaponPanel(const std::vector<Weapon>& weapons, const char* header)
     }
 }
 
-void drawInventoryPanel()
-{
-    std::string header = "INVENTORY";
-    if (m_activeIdx >= 0 && m_activeIdx < totalPlayerCount())
-        header = "INVENTORY  [" + getPlayerName(m_activeIdx) + "]";
+    void drawInventoryPanel()
+    {
+        std::string header = "INVENTORY";
+        if (m_activeIdx >= 0 && m_activeIdx < totalPlayerCount())
+        {
+            // Show slot usage: e.g. "INVENTORY [Frog]  14/20 slots"
+            int used = 0;
+            std::vector<Weapon> inv = getActivePlayerInventory();
+            for (const auto& w : inv) used += w.getSlotSize();
 
-    drawWeaponPanel(getActivePlayerInventory(), header.c_str());
-}
+            header = "INVENTORY  [" + getPlayerName(m_activeIdx) + "]"
+                + "  " + std::to_string(used) + "/20 slots";
+        }
+        drawWeaponPanel(getActivePlayerInventory(), header.c_str());
+    }
+
 
 void drawBackpackPanel()
 {

@@ -209,50 +209,63 @@ public:
 
         switch (enemyType)
         {
+            //1. 
             case EnemyType::ALIEN_ENEMY:
                 strncpy(name, "Alien",      sizeof(name) - 1);
-                setScale(4.0f, 4.0f);
+                setScale(2.0f, 2.0f);
                 break;
+            //2. 
             case EnemyType::BEAST_ENEMY:
                 strncpy(name, "Beast",      sizeof(name) - 1);
-                setScale(4.0f, 4.0f);
+                setScale(3.0f, 3.0f);
                 break;
+               //3.  
             case EnemyType::CYBOT_ENEMY:
                 strncpy(name, "Cybot",      sizeof(name) - 1);
                 setScale(3.0f, 3.0f);
                 break;
+                //4.
             case EnemyType::DRAGONTANK_ENEMY:
                 strncpy(name, "Dragontank", sizeof(name) - 1);
                 setScale(2.5f, 2.5f);
                 break;
+                //5. 
             case EnemyType::GIGAGAIA_ENEMY:
                 strncpy(name, "Gigagaia",   sizeof(name) - 1);
                 setScale(4.0f, 4.0f);
                 break;
+                //6. 
             case EnemyType::GOBLIN_OGAN_ENEMY:
                 strncpy(name, "GoblinOgan", sizeof(name) - 1);
-                setScale(4.0f, 4.0f);
+                setScale(3.0f, 3.0f);
                 break;
+                //7. 
             case EnemyType::IMPS_ENEMY:
                 strncpy(name, "Imps",       sizeof(name) - 1);
-                setScale(5.5f, 5.5f);
-                break;
-            case EnemyType::LAVOSCORE_ENEMY:
-                strncpy(name, "LavosCore",  sizeof(name) - 1);
                 setScale(3.5f, 3.5f);
                 break;
+                //8. 
+            case EnemyType::LAVOSCORE_ENEMY:
+                strncpy(name, "LavosCore",  sizeof(name) - 1);
+                setScale(2.5f, 2.5f);
+                break;
+                //9.
             case EnemyType::MOTHERnBRAIN_ENEMY:
                 strncpy(name, "MotherBrain",sizeof(name) - 1);
                 setScale(5.5f, 5.5f);
                 break;
+                //10. 
             case EnemyType::MUTANT_ENEMY:
                 strncpy(name, "Mutant",     sizeof(name) - 1);
-                setScale(3.5f, 3.5f);
+                setScale(2.5f, 2.5f);
                 break;
+                //10. 
             case EnemyType::NIZBELN_ENEMY:
                 strncpy(name, "Nizbeln",    sizeof(name) - 1);
                 setScale(4.0f, 4.0f);
                 break;
+                //11. 
+
             case EnemyType::BLOB_ENEMY:
                 strncpy(name, "Blob",       sizeof(name) - 1);
                 setScale(4.0f, 4.0f);

@@ -43,6 +43,34 @@ private:
         return nullptr;
     }
 
+    // Artifact weapon IDs are 0, 1, 2 — never evict these
+    static bool isArtifactWeapon(const Weapon& w)
+    {
+        return w.getType() == WeaponType::ARTIFACT;
+    }
+
+
+// ── Add this private method ───────────────────────────────────────────
+private:
+    // Defragments the slots array after any removal
+    // Weapons are repacked left-to-right in weaponStore order
+        void repackSlots()
+        {
+            slots.fill(-1);
+            int pos = 0;
+            for (int i = 0; i < weaponCount; i++)
+            {
+                if (!weaponStore[i].occupied) continue;
+                int sz = weaponStore[i].weapon.getSlotSize();
+                int id = weaponStore[i].weapon.getWeaponId();
+                for (int j = pos; j < pos + sz; j++)
+                    slots[j] = id;
+                pos += sz;
+            }
+        }
+
+
+
 public:
     Inventory()
     {
@@ -86,40 +114,77 @@ public:
 
     int findContiguousFreeBlock(int neededSize) const
     {
-        int count = 0, start = -1;
+        int count = 0;
+        int start = -1;
         for (int i = 0; i < INVENTORY_SIZE; i++)
         {
             if (slots[i] == -1)
             {
-                if (count == 0) start = i;
-                if (++count >= neededSize) return start;
+                if (count == 0) start = i;   // mark start of free run
+                count++;
+                if (count >= neededSize) return start;
             }
-            else { count = 0; start = -1; }
+            else
+            {
+                count = 0;
+                start = -1;   // ← was missing this reset
+            }
         }
         return -1;
     }
-    // In Inventory.h — public section
-bool getWeaponById(int weaponId, Weapon& out) const
-{
-    for (int i = 0; i < weaponCount; i++)
+// In Inventory.h — public section
+    bool getWeaponById(int weaponId, Weapon& out) const
     {
-        if (weaponStore[i].occupied &&
-            weaponStore[i].weapon.getWeaponId() == weaponId)
+        for (int i = 0; i < weaponCount; i++)
         {
-            out = weaponStore[i].weapon;
-            return true;
+            if (weaponStore[i].occupied &&
+                weaponStore[i].weapon.getWeaponId() == weaponId)
+            {
+                out = weaponStore[i].weapon;
+                return true;
+            }
         }
+        return false;
     }
-    return false;
-}
+        // Returns total slots currently occupied across all weapons
+    int getTotalUsedSlots() const
+    {
+        int total = 0;
+        for (int i = 0; i < weaponCount; i++)
+            if (weaponStore[i].occupied)
+                total += weaponStore[i].weapon.getSlotSize();
+        return total;
+    }
+
+    int getFreeSlots() const
+    {
+        return INVENTORY_SIZE - getTotalUsedSlots();
+    }
+
 
 
     bool insertWeapon(const Weapon& weapon)
     {
         if (weaponCount >= MAX_WEAPONS) return false;
 
+        // ── STRICT: reject if total slots would exceed 20 ─────────────────
+        if (getTotalUsedSlots() + weapon.getSlotSize() > INVENTORY_SIZE)
+        {
+            std::cout << "[Inventory] REJECTED: inserting '"
+                    << weapon.getName()
+                    << "' (size=" << weapon.getSlotSize()
+                    << ") would exceed 20 slots. Used="
+                    << getTotalUsedSlots() << "\n";
+            return false;
+        }
+
         int start = findContiguousFreeBlock(weapon.getSlotSize());
-        if (start == -1) return false;
+        if (start == -1)
+        {
+            std::cout << "[Inventory] REJECTED: no contiguous block of size "
+                    << weapon.getSlotSize() << " available\n";
+            return false;
+        }
 
         // Store in flat array
         weaponStore[weaponCount].occupied = true;
@@ -130,37 +195,43 @@ bool getWeaponById(int weaponId, Weapon& out) const
         for (int i = start; i < start + weapon.getSlotSize(); i++)
             slots[i] = weapon.getWeaponId();
 
+        std::cout << "[Inventory] Inserted '" << weapon.getName()
+                << "' (size=" << weapon.getSlotSize()
+                << "). Total used=" << getTotalUsedSlots() << "/20\n";
         return true;
     }
 
-    bool removeWeapon(int weaponId, Weapon& removedWeapon)
+
+bool removeWeapon(int weaponId, Weapon& removedWeapon)
+{
+    for (int i = 0; i < weaponCount; i++)
     {
-        for (int i = 0; i < weaponCount; i++)
+        if (weaponStore[i].occupied &&
+            weaponStore[i].weapon.getWeaponId() == weaponId)
         {
-            if (weaponStore[i].occupied &&
-                weaponStore[i].weapon.getWeaponId() == weaponId)
-            {
-                removedWeapon = weaponStore[i].weapon;
+            removedWeapon = weaponStore[i].weapon;
 
-                // Clear slots
-                for (int s = 0; s < INVENTORY_SIZE; s++)
-                    if (slots[s] == weaponId) slots[s] = -1;
+            for (int s = 0; s < INVENTORY_SIZE; s++)
+                if (slots[s] == weaponId) slots[s] = -1;
 
-                // Compact the store (swap with last)
-                weaponStore[i] = weaponStore[weaponCount - 1];
-                weaponStore[weaponCount - 1].occupied = false;
-                weaponCount--;
-                return true;
-            }
+            weaponStore[i] = weaponStore[weaponCount - 1];
+            weaponStore[weaponCount - 1].occupied = false;
+            weaponCount--;
+
+            repackSlots();   // ← ADD: always defragment after removal
+            return true;
         }
-        return false;
     }
+    return false;
+}
+
 
     std::vector<int> getUniqueWeaponIds() const
     {
         std::vector<int> ids;
         for (int i = 0; i < weaponCount; i++)
-            if (weaponStore[i].occupied)
+            if (weaponStore[i].occupied
+                && !isArtifactWeapon(weaponStore[i].weapon))  // guard
                 ids.push_back(weaponStore[i].weapon.getWeaponId());
         return ids;
     }
@@ -184,67 +255,46 @@ bool getWeaponById(int weaponId, Weapon& out) const
         }
     }
 
-    // ── findBestWeaponsToRemove — unchanged logic, same interface ─────────────
+public:
+    // Greedy eviction: biggest non-artifact first, stops as soon as enough space freed
     std::vector<int> findBestWeaponsToRemove(int neededSize) const
     {
-        std::vector<int> ids = getUniqueWeaponIds();
-        int n = (int)ids.size();
+        struct Candidate { int id; int size; };
+        std::vector<Candidate> candidates;
 
-        std::vector<int> bestChoice;
-        bool found = false;
-
-        for (int mask = 1; mask < (1 << n); mask++)
+        for (int i = 0; i < weaponCount; i++)
         {
-            std::vector<int> chosen;
-            for (int i = 0; i < n; i++)
-                if (mask & (1 << i)) chosen.push_back(ids[i]);
-
-            if (canCreateSpaceByRemoving(chosen, neededSize))
-            {
-                if (!found)
-                {
-                    bestChoice = chosen;
-                    found = true;
-                }
-                else if (chosen.size() < bestChoice.size())
-                {
-                    bestChoice = chosen;
-                }
-                else if (chosen.size() == bestChoice.size() &&
-                         getTotalRemovedSize(chosen) < getTotalRemovedSize(bestChoice))
-                {
-                    bestChoice = chosen;
-                }
-            }
+            if (!weaponStore[i].occupied) continue;
+            int id = weaponStore[i].weapon.getWeaponId();
+            if (isArtifactWeapon(weaponStore[i].weapon)) continue;   // NEVER evict artifacts
+            candidates.push_back({ id, weaponStore[i].weapon.getSlotSize() });
         }
-        return bestChoice;
+
+        // Biggest slot size first  fewest evictions needed
+        std::sort(candidates.begin(), candidates.end(),
+            [](const Candidate& a, const Candidate& b){ return a.size > b.size; });
+
+        int freeNow = getFreeSlots();
+        std::vector<int> toRemove;
+
+        for (const auto& c : candidates)
+        {
+            if (freeNow >= neededSize) break;
+            toRemove.push_back(c.id);
+            freeNow += c.size;
+        }
+
+        if (freeNow < neededSize)
+        {
+            std::cout << "[Inventory] Cannot free " << neededSize
+                      << " slots — only " << freeNow
+                      << " achievable (artifacts blocking)\n";
+            return {};
+        }
+
+        return toRemove;
     }
 
-private:
-    bool canCreateSpaceByRemoving(const std::vector<int>& removeIds, int neededSize) const
-    {
-        std::array<int, INVENTORY_SIZE> tempSlots = slots;
-        for (int removeId : removeIds)
-            for (int i = 0; i < INVENTORY_SIZE; i++)
-                if (tempSlots[i] == removeId) tempSlots[i] = -1;
 
-        int count = 0;
-        for (int i = 0; i < INVENTORY_SIZE; i++)
-        {
-            if (tempSlots[i] == -1) { if (++count >= neededSize) return true; }
-            else count = 0;
-        }
-        return false;
-    }
 
-    int getTotalRemovedSize(const std::vector<int>& removeIds) const
-    {
-        int total = 0;
-        for (int id : removeIds)
-        {
-            const WeaponSlot* s = findSlotById(id);
-            if (s) total += s->weapon.getSlotSize();
-        }
-        return total;
-    }
 };

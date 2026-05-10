@@ -125,55 +125,119 @@ public:
 
     virtual void DoAction() override {}
 
-    // ── Weapon management ─────────────────────────────────────
-    bool pickupWeapon(const Weapon& weapon)
+bool pickupWeapon(const Weapon& weapon)
+{
+    // ── Fast path ─────────────────────────────────────────────────────
+    if (inventory.insertWeapon(weapon)) return true;
+
+    // ── Weapon physically too large to ever fit ───────────────────────
+    if (weapon.getSlotSize() > Inventory::INVENTORY_SIZE)
     {
-        if (inventory.insertWeapon(weapon)) return true;
-
-        std::vector<int> toRemove =
-            inventory.findBestWeaponsToRemove(weapon.getSlotSize());
-        if (toRemove.empty()) return false;
-
-        for (int id : toRemove)
-        {
-            Weapon removed;
-            if (inventory.removeWeapon(id, removed))
-                backpack.addWeapon(removed);
-        }
-        return inventory.insertWeapon(weapon);
-    }
-
-    bool swapInFromBackpack(int backpackIndex)
-    {
-        if (backpackIndex < 0 || backpackIndex >= backpack.getCount())
-            return false;
-
-        Weapon weapon = backpack.getWeaponAt(backpackIndex);
-
-        if (inventory.insertWeapon(weapon))
-        {
-            backpack.removeWeaponAt(backpackIndex);
-            return true;
-        }
-
-        std::vector<int> toRemove =
-            inventory.findBestWeaponsToRemove(weapon.getSlotSize());
-        if (toRemove.empty()) return false;
-
-        for (int id : toRemove)
-        {
-            Weapon removed;
-            if (inventory.removeWeapon(id, removed))
-                backpack.addWeapon(removed);
-        }
-
-        if (inventory.insertWeapon(weapon))
-        {
-            backpack.removeWeaponAt(backpackIndex);
-            return true;
-        }
+        std::cout << "[Player] '" << weapon.getName()
+                  << "' too large (" << weapon.getSlotSize()
+                  << " slots) — sent to backpack\n";
+        backpack.addWeapon(weapon);
         return false;
     }
+
+    bool incomingIsArtifact = (weapon.getWeaponId() >= 0 &&
+                               weapon.getWeaponId() <= 2);
+
+    // ── Build eviction list (greedy, biggest first, no artifacts) ─────
+    std::vector<int> toRemove =
+        inventory.findBestWeaponsToRemove(weapon.getSlotSize());
+
+    if (toRemove.empty())
+    {
+        // Only artifacts remain and incoming is also an artifact
+        // → send to backpack, never lose it
+        std::cout << "[Player] Only artifacts in inventory — '"
+                  << weapon.getName() << "' sent to backpack\n";
+        backpack.addWeapon(weapon);
+        return false;
+    }
+
+    // ── Evict chosen weapons to backpack ──────────────────────────────
+    for (int id : toRemove)
+    {
+        Weapon removed;
+        if (inventory.removeWeapon(id, removed))
+        {
+            backpack.addWeapon(removed);
+            std::cout << "[Player] Evicted '" << removed.getName()
+                      << "' (size=" << removed.getSlotSize()
+                      << ") to backpack\n";
+        }
+    }
+
+    // ── Final strict check before inserting ───────────────────────────
+    if (inventory.getTotalUsedSlots() + weapon.getSlotSize()
+        > Inventory::INVENTORY_SIZE)
+    {
+        std::cout << "[Player] Still over 20 after eviction — '"
+                  << weapon.getName() << "' sent to backpack\n";
+        backpack.addWeapon(weapon);
+        return false;
+    }
+
+    return inventory.insertWeapon(weapon);
+}
+
+bool swapInFromBackpack(int backpackIndex)
+{
+    if (backpackIndex < 0 || backpackIndex >= backpack.getCount())
+        return false;
+
+    Weapon weapon = backpack.getWeaponAt(backpackIndex);
+
+    // ── Fast path: fits directly ──────────────────────────────────────
+    if (inventory.insertWeapon(weapon))
+    {
+        backpack.removeWeaponAt(backpackIndex);
+        std::cout << "[Player] Swapped in '" << weapon.getName()
+                  << "' from backpack slot " << backpackIndex << "\n";
+        return true;
+    }
+
+    // ── Need to evict — same greedy logic, no artifacts ───────────────
+    std::vector<int> toRemove =
+        inventory.findBestWeaponsToRemove(weapon.getSlotSize());
+
+    if (toRemove.empty())
+    {
+        std::cout << "[Player] SwapIn failed — no evictable space for '"
+                  << weapon.getName() << "'\n";
+        return false;
+    }
+
+    for (int id : toRemove)
+    {
+        Weapon removed;
+        if (inventory.removeWeapon(id, removed))
+        {
+            backpack.addWeapon(removed);
+            std::cout << "[Player] Evicted '" << removed.getName()
+                      << "' to backpack to make room\n";
+        }
+    }
+
+    // ── Final strict check ────────────────────────────────────────────
+    if (inventory.getTotalUsedSlots() + weapon.getSlotSize()
+        > Inventory::INVENTORY_SIZE)
+    {
+        std::cout << "[Player] SwapIn still over 20 — aborting\n";
+        return false;
+    }
+
+    if (inventory.insertWeapon(weapon))
+    {
+        backpack.removeWeaponAt(backpackIndex);
+        return true;
+    }
+
+    return false;
+}
+
 
     // ── Movement ──────────────────────────────────────────────
     bool movement(bool& completed_section)
