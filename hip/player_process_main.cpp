@@ -63,6 +63,7 @@ int main(int argc, char* argv[])
         if (!shm->hip_mailbox.is_ready)
         {
             pthread_mutex_unlock(&shm->global_mutex);
+            std::cout << "[PlayerProc] Player " << me << " exiting cleanly (Mailbox aborted)\n";
             break;
         }
 

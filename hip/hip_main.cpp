@@ -19,8 +19,8 @@
 
 struct HIPContext
 {
-    SharedMemoryBlock*        shm;
-    Renderer*                 renderer;
+    SharedMemoryBlock* shm;
+    Renderer* renderer;
     int                       numPlayers;
     int                       running;
     pthread_mutex_t           running_mutex;
@@ -28,6 +28,32 @@ struct HIPContext
     std::vector<pid_t>        playerPids;
     char                      shmName[64];
 };
+
+// --- GLOBAL AND HANDLER ---
+static HIPContext* g_ctx = nullptr;
+
+static void on_hip_sigterm(int)
+{
+    std::cout << "\n[HIP] Received SIGTERM from Arbiter. Safely joining player processes...\n";
+    if (g_ctx)
+    {
+        // Tell player processes the game is over and wake them up
+        g_ctx->shm->state.game_running = false;
+        pthread_cond_broadcast(&g_ctx->shm->turn_condition);
+
+        // Wait for them to cleanly exit their loops
+        for (int i = 0; i < g_ctx->numPlayers; i++)
+        {
+            if (g_ctx->playerPids[i] > 0)
+            {
+                waitpid(g_ctx->playerPids[i], nullptr, 0);
+                std::cout << "[HIP] Player process " << i << " safely joined.\n";
+            }
+        }
+    }
+    std::cout << "[HIP] All processes cleared. Exiting.\n";
+    _exit(0);
+}
 
 static void set_running(HIPContext* ctx, int val)
 {
@@ -87,7 +113,7 @@ static void submitAction(HIPContext* ctx, Action action, int targetIdx, int weap
 
 static void* setupThread(void* args)
 {
-    HIPContext*        ctx   = (HIPContext*)args;
+    HIPContext* ctx   = (HIPContext*)args;
     SharedMemoryBlock* block = ctx->shm;
 
     pthread_mutex_lock(&block->global_mutex);
@@ -144,7 +170,6 @@ static void joinAndCleanup(HIPContext* ctx)
     {
         if (ctx->playerPids[i] > 0)
         {
-            kill(ctx->playerPids[i], SIGTERM);
             waitpid(ctx->playerPids[i], nullptr, 0);
             std::cout << "[HIP] Player process " << i << " joined\n";
         }
@@ -177,6 +202,7 @@ int main(int argc, char* argv[])
         sf::VideoMode((unsigned)WIN_W, (unsigned)WIN_H),
         "Chrono Rift", sf::Style::Titlebar | sf::Style::Close);
 
+    // 1. Declare ctx FIRST before using it in lambdas or assignments
     HIPContext ctx;
     ctx.shm        = shm;
     ctx.running    = 1;
@@ -185,12 +211,22 @@ int main(int argc, char* argv[])
     ctx.shmName[sizeof(ctx.shmName) - 1] = '\0';
     pthread_mutex_init(&ctx.running_mutex, nullptr);
 
+    // 2. NOW set the global pointer and signal handler
+    g_ctx = &ctx;
+
+    struct sigaction sa{};
+    sigemptyset(&sa.sa_mask);
+    sa.sa_handler = on_hip_sigterm;
+    sigaction(SIGTERM, &sa, nullptr);
+
+    // 3. Setup map and renderer
     Map map(0.0f, 0.0f, 860, 800);
     map.loadScreens({ "../MapsNScreen/Fiaona'aForest_Lvl_tile1.png" });
 
     Renderer renderer(shm, &map, &window);
     ctx.renderer = &renderer;
 
+    // 4. Lambdas can now safely capture &ctx
     renderer.setActionCallback([&ctx](Action act, int tgt, int wpn)
     {
         submitAction(&ctx, act, tgt, wpn);
@@ -216,7 +252,7 @@ int main(int argc, char* argv[])
     set_running(&ctx, 0);
 
     pthread_mutex_lock(&shm->global_mutex);
-    shm->state.game_running = false;          // ← Option B: no stop_flag needed
+    shm->state.game_running = false;
     pthread_cond_broadcast(&shm->turn_condition);
     pthread_mutex_unlock(&shm->global_mutex);
 

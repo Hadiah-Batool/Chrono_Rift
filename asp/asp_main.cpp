@@ -70,8 +70,7 @@ static void onSigterm(int)
         std::cout << "\n[ASP] Received SIGTERM from Arbiter. Shutting down enemy threads...\n";
         set_running(g_ctx, 0);
 
-        // FIX: Lock the mutex before broadcasting to prevent "Lost Wakeup" race conditions
-        // ensuring threads gracefully exit rather than hanging forever!
+        // Lock the mutex before broadcasting to prevent "Lost Wakeup" race conditions
         pthread_mutex_lock(&g_ctx->shm->global_mutex);
         pthread_cond_broadcast(&g_ctx->shm->turn_condition);
         pthread_mutex_unlock(&g_ctx->shm->global_mutex);
@@ -79,14 +78,11 @@ static void onSigterm(int)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  decide_action — Enemy AI
-// ─────────────────────────────────────────────────────────────────────────────
-// ─────────────────────────────────────────────────────────────────────────────
 //  decide_action — Smart Heuristic Enemy AI
 // ─────────────────────────────────────────────────────────────────────────────
 static void decide_action(int enemyIndex, SharedMemoryBlock* shm)
 {
-    // 1. Identify available targets and find the weakest link
+    // Identify available targets and find the weakest link
     int numPlayers = shm->state.num_active_players;
     int alivePlayers[4];
     int aliveCount = 0;
@@ -112,7 +108,7 @@ static void decide_action(int enemyIndex, SharedMemoryBlock* shm)
         return;
     }
 
-    // 2. TACTIC: Actively Hunt for Artifacts!
+    //  TACTIC: Actively Hunt for Artifacts!
     // If we don't have an artifact, check if any of the 3 are lying on the ground.
     if (shm->state.enemies_artifact_state[enemyIndex].holding_artifact_idx == -1) {
         int desired_artifact = -1;
@@ -124,18 +120,17 @@ static void decide_action(int enemyIndex, SharedMemoryBlock* shm)
             }
         }
 
-        // // 80% chance to drop everything and grab the artifact if it's there
-        // if (desired_artifact != -1 && (rand() % 100 < 80)) {
-        //     shm->asp_mailbox.action_type          = Action::GET_ARTIFACT;
-        //     shm->asp_mailbox.requesting_entity_id = enemyIndex;
-        //     shm->asp_mailbox.weapon_id            = shm->state.artifacts[desired_artifact].getWeaponId();
-        //     shm->asp_mailbox.is_ready             = true;
-        //     std::cout << "[ASP] TACTIC: Enemy " << enemyIndex << " is lunging for an Artifact!\n";
-        //     return;
-        // }
+        // 80% chance to drop everything and grab the artifact if it's there
+        if (desired_artifact != -1 && (rand() % 100 < 80)) {
+            shm->asp_mailbox.action_type          = Action::GET_ARTIFACT;
+            shm->asp_mailbox.requesting_entity_id = enemyIndex;
+            shm->asp_mailbox.weapon_id            = shm->state.artifacts[desired_artifact].getWeaponId();
+            shm->asp_mailbox.is_ready             = true;
+            std::cout << "[ASP] TACTIC: Enemy " << enemyIndex << " is lunging for an Artifact!\n";
+            return;
+        }
     }
 
-    // 3. TACTIC: Stand Guard / Hesitate
     // 10% chance to just guard (SKIP) to preserve 50% stamina and act again faster
     if (rand() % 100 < 0) {
         shm->asp_mailbox.action_type          = Action::SKIP;
@@ -145,7 +140,6 @@ static void decide_action(int enemyIndex, SharedMemoryBlock* shm)
         return;
     }
 
-    // 4. TACTIC: Execute Combat
     // Default to striking the weakest player to eliminate threats quickly.
     int target = weakestPlayerIdx;
 
@@ -170,7 +164,7 @@ static void* enemyThreadFunc(void* arg)
 
     while (get_running(ctx->ctx))
     {
-        // ── PHASE 1: Wait until it is MY turn ────────────────────────────
+        // Wait until it is MY turn
         pthread_mutex_lock(&shm->global_mutex);
 
         while (get_running(ctx->ctx))
@@ -185,7 +179,7 @@ static void* enemyThreadFunc(void* arg)
             pthread_cond_wait(&shm->turn_condition, &shm->global_mutex);
         }
 
-        // ── PHASE 2: Exit if dead or shutting down ────────────────────────
+        // Exit if dead or shutting down
         if (!get_running(ctx->ctx) || !shm->state.enemies[me].isAlive())
         {
             pthread_mutex_unlock(&shm->global_mutex);
@@ -193,7 +187,7 @@ static void* enemyThreadFunc(void* arg)
             break;
         }
 
-        // ── PHASE 3: Decide and post action ──────────────────────────────
+        // Decide and post action
         if (shm->state.enemies[me].isStunned())
         {
             std::cout << "[ASP] Enemy " << me << " is STUNNED — forced SKIP.\n";
@@ -209,8 +203,7 @@ static void* enemyThreadFunc(void* arg)
         pthread_cond_broadcast(&shm->turn_condition);
         pthread_mutex_unlock(&shm->global_mutex);
 
-        // ── PHASE 4: CONSUMED GATE ────────────────────────────────────────
-        // Prevents the "hundreds of SKIPs" infinite loop race condition
+        // CONSUMED GATE
         pthread_mutex_lock(&shm->global_mutex);
         while (shm->asp_mailbox.is_ready && get_running(ctx->ctx))
             pthread_cond_wait(&shm->turn_condition, &shm->global_mutex);
