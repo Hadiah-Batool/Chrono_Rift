@@ -198,8 +198,18 @@ int main(int argc, char* argv[]) {
                     pthread_mutex_unlock(&shared_block->global_mutex);
                     break;
                 }
-
                 if(shared_block->state.game_running && need_more_enemies(shared_block)) {
+
+                    // --- NEW LOGIC: Check if Sublevel 2 just ended ---
+                    if (shared_block->state.sublevel == 2) {
+                        std::cout << "\n[ARBITER] Sublevel 2 cleared! Demo Complete. YOU WIN!\n";
+                        shared_block->state.game_running = false;
+                        shared_block->state.game_result = true;
+                        pthread_mutex_unlock(&shared_block->global_mutex);
+                        break;
+                    }
+                    // -------------------------------------------------
+
                     shared_block->state.hassublevelended = true;
                     shared_block->state.sublevel++;
                     std::cout << "[ARBITER] Wave cleared! Loading Sublevel " << shared_block->state.sublevel << "...\n";
