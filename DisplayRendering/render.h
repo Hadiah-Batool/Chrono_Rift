@@ -984,6 +984,9 @@ void drawArtifactBanners()
                                 m_swapFlashMsg   = "Swapped in: " + bp[m_selectedWeapon].getName();
                                 m_swapFlashTimer = 2.0f;   // show for 2 seconds
                                 fireCallback(Action::SWAP_IN, -1, m_selectedWeapon);
+                                    m_selectedWeapon = 0;   // reset after inventory change
+ 
+  
                             }
                         }
                         break;

@@ -68,7 +68,54 @@ private:
                 pos += sz;
             }
         }
+std::vector<int> findBestWeaponsToRemoveInternal(int neededSize,
+                                                  bool allowArtifacts) const
+{
+    struct Candidate { int id; int size; bool isArtifact; };
+    std::vector<Candidate> candidates;
 
+    for (int i = 0; i < weaponCount; i++)
+    {
+        if (!weaponStore[i].occupied) continue;
+        bool art = isArtifactWeapon(weaponStore[i].weapon);
+        if (art && !allowArtifacts) continue;   // ← gate
+        candidates.push_back({
+            weaponStore[i].weapon.getWeaponId(),
+            weaponStore[i].weapon.getSlotSize(),
+            art
+        });
+    }
+
+    // Non-artifacts first (biggest), then artifacts last (biggest)
+    // So we only touch artifacts if normal weapons aren't enough
+    std::sort(candidates.begin(), candidates.end(),
+        [](const Candidate& a, const Candidate& b)
+        {
+            if (a.isArtifact != b.isArtifact)
+                return !a.isArtifact;   // non-artifacts come first
+            return a.size > b.size;     // then biggest first
+        });
+
+    int freeNow = getFreeSlots();
+    std::vector<int> toRemove;
+
+    for (const auto& c : candidates)
+    {
+        if (freeNow >= neededSize) break;
+        toRemove.push_back(c.id);
+        freeNow += c.size;
+    }
+
+    if (freeNow < neededSize)
+    {
+        std::cout << "[Inventory] Cannot free " << neededSize
+                  << " slots — only " << freeNow
+                  << " achievable\n";
+        return {};
+    }
+
+    return toRemove;
+}
 
 
 public:
@@ -78,8 +125,12 @@ public:
         for (auto& s : weaponStore) s.occupied = false;
         weaponCount = 0;
     }
-
-    // ── Drop-in replacement for getEquippedWeapons() ──────────────────────────
+    // New overload — allows evicting artifacts (used by voluntary swapIn)
+    std::vector<int> findBestWeaponsToRemoveAllowArtifacts(int neededSize) const
+    {
+        return findBestWeaponsToRemoveInternal(neededSize, true);
+    }
+        // ── Drop-in replacement for getEquippedWeapons() ──────────────────────────
     // Returns a vector built on the fly — only called by renderer, not hot path
     std::vector<std::pair<int, Weapon>> getEquippedWeaponsVec() const
     {
@@ -218,7 +269,7 @@ bool removeWeapon(int weaponId, Weapon& removedWeapon)
             weaponStore[weaponCount - 1].occupied = false;
             weaponCount--;
 
-            repackSlots();   // ← ADD: always defragment after removal
+            repackSlots();   //  ADD: always defragment after removal
             return true;
         }
     }

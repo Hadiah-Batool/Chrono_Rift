@@ -124,20 +124,20 @@ static void decide_action(int enemyIndex, SharedMemoryBlock* shm)
             }
         }
 
-        // 80% chance to drop everything and grab the artifact if it's there
-        if (desired_artifact != -1 && (rand() % 100 < 80)) {
-            shm->asp_mailbox.action_type          = Action::GET_ARTIFACT;
-            shm->asp_mailbox.requesting_entity_id = enemyIndex;
-            shm->asp_mailbox.weapon_id            = shm->state.artifacts[desired_artifact].getWeaponId();
-            shm->asp_mailbox.is_ready             = true;
-            std::cout << "[ASP] TACTIC: Enemy " << enemyIndex << " is lunging for an Artifact!\n";
-            return;
-        }
+        // // 80% chance to drop everything and grab the artifact if it's there
+        // if (desired_artifact != -1 && (rand() % 100 < 80)) {
+        //     shm->asp_mailbox.action_type          = Action::GET_ARTIFACT;
+        //     shm->asp_mailbox.requesting_entity_id = enemyIndex;
+        //     shm->asp_mailbox.weapon_id            = shm->state.artifacts[desired_artifact].getWeaponId();
+        //     shm->asp_mailbox.is_ready             = true;
+        //     std::cout << "[ASP] TACTIC: Enemy " << enemyIndex << " is lunging for an Artifact!\n";
+        //     return;
+        // }
     }
 
     // 3. TACTIC: Stand Guard / Hesitate
     // 10% chance to just guard (SKIP) to preserve 50% stamina and act again faster
-    if (rand() % 100 < 10) {
+    if (rand() % 100 < 0) {
         shm->asp_mailbox.action_type          = Action::SKIP;
         shm->asp_mailbox.requesting_entity_id = enemyIndex;
         shm->asp_mailbox.is_ready             = true;

@@ -1,5 +1,6 @@
 #pragma once
 #include <vector>
+#include <iostream>
 #include "../Weapons/Weapons.h"
 
 class Backpack
@@ -22,6 +23,21 @@ public:
 
     bool isEmpty() const { return count == 0; }
     int  getCount() const { return count; }
+// Add this to Backpack public section
+bool removeWeaponById(int weaponId)
+{
+    for (int i = 0; i < count; i++)
+    {
+        if (storedWeapons[i].getWeaponId() == weaponId)
+        {
+            removeWeaponAt(i);   // reuses existing shift logic
+            return true;
+        }
+    }
+    std::cout << "[Backpack] removeWeaponById: id="
+              << weaponId << " not found\n";
+    return false;
+}
 
     // Returns a freshly built vector — only called by renderer, not hot path
     std::vector<Weapon> getWeapons() const

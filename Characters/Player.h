@@ -6,7 +6,7 @@
 #include <utility>
 #include <cstdlib>
 #include <cmath>
-#include "Characters.h"
+#include "Characters_header.h"
 #include "Inventory.h"
 #include "Backpack.h"
 #include "../resources/shared_mem_abs.h"
@@ -188,25 +188,29 @@ bool swapInFromBackpack(int backpackIndex)
     if (backpackIndex < 0 || backpackIndex >= backpack.getCount())
         return false;
 
-    Weapon weapon = backpack.getWeaponAt(backpackIndex);
+    Weapon weapon   = backpack.getWeaponAt(backpackIndex);
+    int    weaponId = weapon.getWeaponId();
 
-    // ── Fast path: fits directly ──────────────────────────────────────
+    // ── Fast path ─────────────────────────────────────────────────────
     if (inventory.insertWeapon(weapon))
     {
-        backpack.removeWeaponAt(backpackIndex);
-        std::cout << "[Player] Swapped in '" << weapon.getName()
-                  << "' from backpack slot " << backpackIndex << "\n";
+        backpack.removeWeaponById(weaponId);
+        std::cout << "[Player] Swapped in '" << weapon.getName() << "'\n";
         return true;
     }
 
-    // ── Need to evict — same greedy logic, no artifacts ───────────────
-    std::vector<int> toRemove =
-        inventory.findBestWeaponsToRemove(weapon.getSlotSize());
+    // ── Evict — artifacts CAN be evicted here (player chose this swap) ─
+    bool incomingIsArtifact = (weapon.getType() == WeaponType::ARTIFACT);
+
+    std::vector<int> toRemove = incomingIsArtifact
+        ? inventory.findBestWeaponsToRemove(weapon.getSlotSize())           // artifact in → never evict other artifacts
+        : inventory.findBestWeaponsToRemoveAllowArtifacts(weapon.getSlotSize()); // normal in → can evict artifacts
 
     if (toRemove.empty())
     {
-        std::cout << "[Player] SwapIn failed — no evictable space for '"
-                  << weapon.getName() << "'\n";
+        std::cout << "[Player] SwapIn failed — cannot free "
+                  << weapon.getSlotSize()
+                  << " slots for '" << weapon.getName() << "'\n";
         return false;
     }
 
@@ -217,11 +221,12 @@ bool swapInFromBackpack(int backpackIndex)
         {
             backpack.addWeapon(removed);
             std::cout << "[Player] Evicted '" << removed.getName()
-                      << "' to backpack to make room\n";
+                      << "' (size=" << removed.getSlotSize()
+                      << ") to backpack to make room for '"
+                      << weapon.getName() << "'\n";
         }
     }
 
-    // ── Final strict check ────────────────────────────────────────────
     if (inventory.getTotalUsedSlots() + weapon.getSlotSize()
         > Inventory::INVENTORY_SIZE)
     {
@@ -231,12 +236,17 @@ bool swapInFromBackpack(int backpackIndex)
 
     if (inventory.insertWeapon(weapon))
     {
-        backpack.removeWeaponAt(backpackIndex);
+        backpack.removeWeaponById(weaponId);
+        std::cout << "[Player] Swapped in '" << weapon.getName()
+                  << "' after eviction. Used="
+                  << inventory.getTotalUsedSlots() << "/20\n";
         return true;
     }
 
     return false;
 }
+
+
 
 
     // ── Movement ──────────────────────────────────────────────
