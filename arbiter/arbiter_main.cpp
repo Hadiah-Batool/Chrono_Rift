@@ -7,7 +7,7 @@ pid_t g_asp_pid = -1;
 SharedMemoryBlock* g_shm_ptr = nullptr;
 volatile sig_atomic_t g_sigalrm_received = 0;
 volatile sig_atomic_t g_sigterm_received = 0;
-bool g_ultimate_active = false; // <--- Instantiating the Ultimate Flag
+bool g_ultimate_active = false;
 
 static void handle_sigalrm(int sig) { g_sigalrm_received = 1; }
 static void handle_sigterm(int sig) {
@@ -104,6 +104,18 @@ int main(int argc, char* argv[]) {
     } else {
         // Proceed with game initialization
         handle_player_action(shared_block->hip_mailbox, shared_block);
+        shared_block->state.level = shared_block->hip_mailbox.selected_level;
+        if (shared_block->state.level < 1 || shared_block->state.level > 3)
+        {
+            std::cerr << "[ARBITER] WARNING: selected_level was "
+                    << shared_block->state.level
+                    << " — defaulting to 1\n";
+            shared_block->state.level = 1;
+        }
+                std::cout << "[ARBITER DEBUG] hip_mailbox.selected_level = " 
+                << shared_block->hip_mailbox.selected_level << "\n";
+        std::cout << "[ARBITER DEBUG] state.level after assign = " 
+                << shared_block->state.level << "\n";
 
         arbiter.initialize_entities(0607, 7, 7, shared_block->state.level, shared_block->state.sublevel);
         arbiter.initialize_players_positions(shared_block->state.level, shared_block->state.sublevel);
@@ -111,7 +123,7 @@ int main(int argc, char* argv[]) {
         shared_block->hip_mailbox.is_ready = false;
         pthread_mutex_unlock(&shared_block->global_mutex);
 
-        // ── ARTIFACT DROP SCHEDULE ────────────────────────────────────────────────
+        // ── ARTIFACT DROP SCHEDULE
         shared_block->state.num_artifacts = 3;
 
         new (&shared_block->state.artifacts[0]) Artifact(0, ArtifactType::ECLIPSE_RELIC, "Solar Core",    95, 10);
@@ -133,7 +145,7 @@ int main(int argc, char* argv[]) {
         pthread_create(&deadlock_detector, NULL, deadlock_detection, shared_block);
         threads_started = true; // Mark threads as active so we know to cancel them later
 
-        // ── MAIN GAME LOOP ────────────────────────────────────────────────────────
+        // ── MAIN GAME LOOP
         while (shared_block->state.game_running) {
             pthread_mutex_lock(&shared_block->global_mutex);
             int turn_index = -1;
@@ -198,8 +210,17 @@ int main(int argc, char* argv[]) {
                     pthread_mutex_unlock(&shared_block->global_mutex);
                     break;
                 }
-
                 if(shared_block->state.game_running && need_more_enemies(shared_block)) {
+
+                    // Check if Sublevel 2 just ended
+                    if (shared_block->state.sublevel == 2) {
+                        std::cout << "\n[ARBITER] Sublevel 2 cleared! Demo Complete. YOU WIN!\n";
+                        shared_block->state.game_running = false;
+                        shared_block->state.game_result = true;
+                        pthread_mutex_unlock(&shared_block->global_mutex);
+                        break;
+                    }
+
                     shared_block->state.hassublevelended = true;
                     shared_block->state.sublevel++;
                     std::cout << "[ARBITER] Wave cleared! Loading Sublevel " << shared_block->state.sublevel << "...\n";
@@ -239,7 +260,7 @@ int main(int argc, char* argv[]) {
                 }
                 shared_block->state.turn_count++;
 
-                // ── ARTIFACT DROP CHECK ───────────────────────────────────────────────────
+                // ── ARTIFACT DROP CHECK
                 {
                     struct { ArtifactType type; const char* name; int dmg; int slots; } schedule[3] = {
                         { ArtifactType::SOLAR_CORE,    "Solar Core",    95, 10 },
@@ -274,7 +295,7 @@ int main(int argc, char* argv[]) {
 
             if (g_sigalrm_received) {
                 g_sigalrm_received = 0;
-                g_ultimate_active = false; // <--- Restore Enemy Time!
+                g_ultimate_active = false; //  Restore Enemy Time!
 
                 if (g_asp_pid > 0) {
                     std::cout << "\n[ARBITER] *** 10 SECONDS PASSED! ULTIMATE ABILITY ENDED! ***\n";
@@ -296,7 +317,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // ── CLEAN EXIT PROTOCOL ───────────────────────────────────────────────────
+    // ── CLEAN EXIT PROTOCOL
     std::cout << "\n[ARBITER] Sending SIGTERM to child processes...\n";
     kill(hip_pid, SIGTERM);
     kill(asp_pid, SIGTERM);

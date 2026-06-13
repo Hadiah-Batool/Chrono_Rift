@@ -30,17 +30,16 @@ using std::array;
 #define time_of_response 3
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  GLOBALS (Defined in arbiter.cpp)
+//  GLOBALS
 // ─────────────────────────────────────────────────────────────────────────────
 extern pid_t g_asp_pid;
 extern SharedMemoryBlock* g_shm_ptr;
 extern volatile sig_atomic_t g_sigalrm_received;
 extern volatile sig_atomic_t g_sigterm_received;
-extern bool g_ultimate_active; // <--- The Ultimate Flag
+extern bool g_ultimate_active; // The Ultimate Flag
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ARTIFACT HELPER SECTION (Requires resource_table_mutex lock)
-// ─────────────────────────────────────────────────────────────────────────────
+//  ARTIFACT HELPER SECTION
 
 static inline int find_artifact_idx(SharedMemoryBlock* sb, int weapon_id) {
     for (int i = 0; i < sb->state.num_artifacts; ++i)
@@ -413,32 +412,48 @@ inline void handle_player_action(const ActionRequest& request, SharedMemoryBlock
         shared_block->state.players[attacker_id].ResetStamina();
         break;
     }
-
-    case Action::USE_WEAPON: {
-        if (!shared_block->state.enemies[target_id].isAlive()) {
-            std::cout << "[ARBITER] Target already dead. Weapon strike wasted!\n";
-            shared_block->state.players[attacker_id].ResetStamina();
-            break;
-        }
-
-        int weapon_id = shared_block->hip_mailbox.weapon_id;
-        int weapon_damage = 0;
-
-        if (shared_block->state.players[attacker_id].getInventory().hasWeapon(weapon_id)) {
-            weapon_damage = shared_block->state.players[attacker_id].getInventory().getEquippedWeapons().at(weapon_id).second.getDamage();
-        }
-
-        shared_block->state.enemies[target_id].TakeDamage(weapon_damage);
-        std::cout << "[ARBITER] Player " << attacker_id << " used weapon " << weapon_id
-                  << " on Enemy " << target_id << " for " << weapon_damage << " DMG!\n";
-
-        if (!shared_block->state.enemies[target_id].isAlive()) {
-            handle_enemy_death(shared_block, target_id);
-        }
-
+case Action::USE_WEAPON: {
+    if (!shared_block->state.enemies[target_id].isAlive()) {
+        std::cout << "[ARBITER] Target already dead. Weapon strike wasted!\n";
         shared_block->state.players[attacker_id].ResetStamina();
         break;
     }
+
+    int weapon_id     = shared_block->hip_mailbox.weapon_id;
+    int weapon_damage = 0;
+    bool found        = false;
+
+    //  Search by actual weapon ID, not slot index
+    for (auto& [slot, weapon] : shared_block->state.players[attacker_id]
+                                    .getInventory().getEquippedWeapons())
+    {
+        if (weapon.getWeaponId() == weapon_id)
+        {
+            weapon_damage = weapon.getDamage();
+            found         = true;
+            break;
+        }
+    }
+
+    if (!found)
+    {
+        std::cout << "[ARBITER] Player " << attacker_id
+                  << " weapon id=" << weapon_id << " not found in inventory. Turn skipped.\n";
+        shared_block->state.players[attacker_id].ResetStamina();
+        break;
+    }
+
+    shared_block->state.enemies[target_id].TakeDamage(weapon_damage);
+    std::cout << "[ARBITER] Player " << attacker_id << " used weapon " << weapon_id
+              << " on Enemy " << target_id << " for " << weapon_damage << " DMG!\n";
+
+    if (!shared_block->state.enemies[target_id].isAlive())
+        handle_enemy_death(shared_block, target_id);
+
+    shared_block->state.players[attacker_id].ResetStamina();
+    break;
+}
+
 
     case Action::SWAP_IN: {
         int backpack_idx = shared_block->hip_mailbox.weapon_id;

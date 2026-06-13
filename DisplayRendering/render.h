@@ -137,7 +137,11 @@ void setPartyReadyCallback(std::function<void(const PartyConfig&)> cb)
 }
 
 // in Renderer private members:
-std::function<void(const PartyConfig&)> m_partyReadyCallback;
+
+void setLevelSelectedCallback(std::function<void(int)> cb)
+{
+    m_levelSelectedCallback = cb;
+}
 
 
 
@@ -352,6 +356,8 @@ private:
     GameMenu* m_menu = nullptr;   // we'll construct it internally
     PartyConfig m_party;
     bool m_partyReady = false;
+std::function<void(const PartyConfig&)> m_partyReadyCallback;
+std::function<void(int)> m_levelSelectedCallback;
 
 
 struct DmgPopup

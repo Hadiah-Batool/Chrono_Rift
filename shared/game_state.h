@@ -68,7 +68,7 @@ struct GameState {
     int  current_turn_owner_id;
     bool is_player_turn;
 
-    int level;
+    int level =1;
     int sublevel;
     int enemies_defeated;
 
