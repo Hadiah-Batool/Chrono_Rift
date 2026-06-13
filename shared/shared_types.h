@@ -45,6 +45,7 @@ struct ActionRequest {
     int weapon_id;
     bool is_ready;
     PlayerType types[4];
+    int selected_level =1;
 };
 
 #endif // SHARED_TYPES_H

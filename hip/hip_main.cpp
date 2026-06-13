@@ -17,31 +17,41 @@
 #include "../DisplayRendering/render.h"
 #include "../DisplayRendering/Menu.h"
 
+// ── Level tile table — file scope, shared by all lambdas ─────────────────────
+struct LevelTiles { const char* tile1; const char* tile2; };
+static const LevelTiles LEVEL_TILES[] = {
+    { nullptr, nullptr },
+    { "../MapsNScreen/Fiaona'aForest_Lvl_tile1.png", "../MapsNScreen/Fiaona'aForest_Lvl_tile2.png" },
+    { "../MapsNScreen/ForestRuins_lvl_tile1.png",    "../MapsNScreen/ForestRuins_lvl_tile2.png"    },
+    { "../MapsNScreen/Cathedral_lvl_tile1.png",      "../MapsNScreen/Cathedral_lvl_tile2.png"      },
+};
+
+// ── HIP Context ───────────────────────────────────────────────────────────────
 struct HIPContext
 {
-    SharedMemoryBlock* shm;
-    Renderer* renderer;
+    SharedMemoryBlock*        shm;
+    Renderer*                 renderer;
     int                       numPlayers;
     int                       running;
     pthread_mutex_t           running_mutex;
     std::array<PlayerType, 4> playerTypes;
     std::vector<pid_t>        playerPids;
     char                      shmName[64];
+    int                       selected_level;
 };
 
-// --- GLOBAL AND HANDLER ---
+// ── Global pointer for signal handler ────────────────────────────────────────
 static HIPContext* g_ctx = nullptr;
 
+// ── SIGTERM handler ───────────────────────────────────────────────────────────
 static void on_hip_sigterm(int)
 {
     std::cout << "\n[HIP] Received SIGTERM from Arbiter. Safely joining player processes...\n";
     if (g_ctx)
     {
-        // Tell player processes the game is over and wake them up
         g_ctx->shm->state.game_running = false;
         pthread_cond_broadcast(&g_ctx->shm->turn_condition);
 
-        // Wait for them to cleanly exit their loops
         for (int i = 0; i < g_ctx->numPlayers; i++)
         {
             if (g_ctx->playerPids[i] > 0)
@@ -55,6 +65,7 @@ static void on_hip_sigterm(int)
     _exit(0);
 }
 
+// ── Running flag helpers ──────────────────────────────────────────────────────
 static void set_running(HIPContext* ctx, int val)
 {
     pthread_mutex_lock(&ctx->running_mutex);
@@ -70,6 +81,7 @@ static int get_running(HIPContext* ctx)
     return val;
 }
 
+// ── Action log helper ─────────────────────────────────────────────────────────
 static void pushLog(SharedMemoryBlock* shm, const char* fmt, ...)
 {
     char buf[ACTION_MSG_LEN];
@@ -85,6 +97,7 @@ static void pushLog(SharedMemoryBlock* shm, const char* fmt, ...)
     log.count = std::min(log.count + 1, ACTION_LOG_SIZE);
 }
 
+// ── Submit player action to mailbox ──────────────────────────────────────────
 static void submitAction(HIPContext* ctx, Action action, int targetIdx, int weaponIdx = -1)
 {
     pthread_mutex_lock(&ctx->shm->global_mutex);
@@ -111,9 +124,10 @@ static void submitAction(HIPContext* ctx, Action action, int targetIdx, int weap
     pthread_mutex_unlock(&ctx->shm->global_mutex);
 }
 
+// ── Setup thread — sends SETUP_GAME mailbox to arbiter ───────────────────────
 static void* setupThread(void* args)
 {
-    HIPContext* ctx   = (HIPContext*)args;
+    HIPContext*        ctx   = (HIPContext*)args;
     SharedMemoryBlock* block = ctx->shm;
 
     pthread_mutex_lock(&block->global_mutex);
@@ -123,18 +137,22 @@ static void* setupThread(void* args)
     block->hip_mailbox.action_type          = Action::SETUP_GAME;
     block->hip_mailbox.requesting_entity_id = -1;
     block->hip_mailbox.target_id            = ctx->numPlayers;
+    block->hip_mailbox.selected_level       = ctx->selected_level;
 
     for (int i = 0; i < ctx->numPlayers; i++)
         block->hip_mailbox.types[i] = ctx->playerTypes[i];
 
     block->hip_mailbox.is_ready = true;
 
-    pushLog(block, "[HIP] Setup sent: %d players", ctx->numPlayers);
+    pushLog(block, "[HIP] Setup sent: %d players, level %d",
+            ctx->numPlayers, ctx->selected_level);
+
     pthread_cond_broadcast(&block->turn_condition);
     pthread_mutex_unlock(&block->global_mutex);
     return nullptr;
 }
 
+// ── Spawn one process per player ─────────────────────────────────────────────
 static void spawnPlayerProcesses(HIPContext* ctx)
 {
     ctx->playerPids.resize(ctx->numPlayers);
@@ -147,13 +165,8 @@ static void spawnPlayerProcesses(HIPContext* ctx)
         {
             char idxStr[16];
             snprintf(idxStr, sizeof(idxStr), "%d", i);
-
-            execl("./player_process",
-                  "player_process",
-                  idxStr,
-                  ctx->shmName,
-                  nullptr);
-
+            execl("./player_process", "player_process",
+                  idxStr, ctx->shmName, nullptr);
             perror("[HIP] execl failed");
             exit(1);
         }
@@ -164,6 +177,7 @@ static void spawnPlayerProcesses(HIPContext* ctx)
     }
 }
 
+// ── Wait for all player processes to exit ────────────────────────────────────
 static void joinAndCleanup(HIPContext* ctx)
 {
     for (int i = 0; i < ctx->numPlayers; i++)
@@ -176,6 +190,7 @@ static void joinAndCleanup(HIPContext* ctx)
     }
 }
 
+// ── Player type name (debug) ──────────────────────────────────────────────────
 static const char* typeName(PlayerType t)
 {
     switch (t)
@@ -188,67 +203,97 @@ static const char* typeName(PlayerType t)
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  MAIN
+// ─────────────────────────────────────────────────────────────────────────────
 int main(int argc, char* argv[])
 {
     if (argc < 2) { std::cerr << "[HIP] Usage: hip <shm_name>\n"; return 1; }
 
+    // ── Attach shared memory ──────────────────────────────────────────────────
     int fd = shm_open(argv[1], O_RDWR, 0666);
     SharedMemoryBlock* shm = (SharedMemoryBlock*)mmap(
         nullptr, sizeof(SharedMemoryBlock),
         PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
 
+    // ── SFML window ───────────────────────────────────────────────────────────
     sf::RenderWindow window(
         sf::VideoMode((unsigned)WIN_W, (unsigned)WIN_H),
         "Chrono Rift", sf::Style::Titlebar | sf::Style::Close);
 
-    // 1. Declare ctx FIRST before using it in lambdas or assignments
+    // ── 1. Init context ───────────────────────────────────────────────────────
     HIPContext ctx;
-    ctx.shm        = shm;
-    ctx.running    = 1;
-    ctx.numPlayers = 0;
+    ctx.shm            = shm;
+    ctx.renderer       = nullptr;
+    ctx.running        = 1;
+    ctx.numPlayers     = 0;
+    ctx.selected_level = 1;           // safe default
     strncpy(ctx.shmName, argv[1], sizeof(ctx.shmName) - 1);
     ctx.shmName[sizeof(ctx.shmName) - 1] = '\0';
     pthread_mutex_init(&ctx.running_mutex, nullptr);
 
-    // 2. NOW set the global pointer and signal handler
+    // ── 2. Global pointer + signal handler ───────────────────────────────────
     g_ctx = &ctx;
-
     struct sigaction sa{};
     sigemptyset(&sa.sa_mask);
     sa.sa_handler = on_hip_sigterm;
     sigaction(SIGTERM, &sa, nullptr);
 
-    // 3. Setup map and renderer
-    Map map(0.0f, 0.0f, 860, 800);
-    map.loadScreens({ "../MapsNScreen/Fiaona'aForest_Lvl_tile1.png" });
-
+    // ── 3. Map + Renderer ─────────────────────────────────────────────────────
+    Map      map(0.0f, 0.0f, 860, 800);
     Renderer renderer(shm, &map, &window);
     ctx.renderer = &renderer;
 
-    // 4. Lambdas can now safely capture &ctx
+    // Load level 1 tiles as default while menu is showing
+    map.loadScreens({ LEVEL_TILES[1].tile1, LEVEL_TILES[1].tile2 });
+
+    // ── 4. Callbacks ──────────────────────────────────────────────────────────
+
+    // Not triggered by menu directly, but wired in case renderer calls it
+    renderer.setLevelSelectedCallback([&ctx, &map](int level)
+    {
+        if (level < 1 || level > 3) level = 1;
+        ctx.selected_level = level;
+        map.loadScreens({ LEVEL_TILES[level].tile1, LEVEL_TILES[level].tile2 });
+        std::cout << "[HIP] Level " << level << " tiles loaded (via callback).\n";
+    });
+
     renderer.setActionCallback([&ctx](Action act, int tgt, int wpn)
     {
         submitAction(&ctx, act, tgt, wpn);
     });
 
-    renderer.setPartyReadyCallback([&ctx](const PartyConfig& party)
+    //  Capture &map so loadScreens is reachable inside the lambda
+    renderer.setPartyReadyCallback([&ctx, &map](const PartyConfig& party)
     {
-        ctx.numPlayers = party.numPlayers();
+        // Pull everything from the confirmed party config
+        ctx.numPlayers     = party.numPlayers();
+        ctx.selected_level = party.selectedLevel;
+
         for (int i = 0; i < ctx.numPlayers; i++)
             ctx.playerTypes[i] = party.players[i];
 
+        //  Reload correct tiles NOW — before game loop starts
+        int lv = ctx.selected_level;
+        if (lv < 1 || lv > 3) lv = 1;
+        map.loadScreens({ LEVEL_TILES[lv].tile1, LEVEL_TILES[lv].tile2 });
+        std::cout << "[HIP] Tiles loaded for level " << lv << "\n";
+
+        // Send SETUP_GAME to arbiter
         pthread_t setupTid;
         pthread_create(&setupTid, nullptr, setupThread, &ctx);
         pthread_join(setupTid, nullptr);
         std::cout << "[HIP] Setup complete\n";
 
+        // Fork player processes
         spawnPlayerProcesses(&ctx);
     });
 
+    // ── 5. Enter game loop (blocks until game ends) ───────────────────────────
     renderer.run();
 
-    // ── Cleanup ───────────────────────────────────────────────────────────
+    // ── 6. Cleanup ────────────────────────────────────────────────────────────
     set_running(&ctx, 0);
 
     pthread_mutex_lock(&shm->global_mutex);

@@ -122,9 +122,14 @@ PartyConfig run()
 }
 
 
+// Public getter
+int getSelectedLevel() const { return m_selectedLevel; }
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 private:
 // ─────────────────────────────────────────────────────────────────────────────
+
 
     sf::RenderWindow& m_window;
     string            m_mainBgPath;
@@ -145,6 +150,8 @@ private:
     bool        m_prevClick   = false;
     int         m_selectedLevel = 1;
     PartyConfig m_result;
+   
+   
 
     // ── Card layout constants — one place, used by both tick and draw ─────────
     static constexpr float CARD_W   = 250.f;

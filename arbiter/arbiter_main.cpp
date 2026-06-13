@@ -104,6 +104,18 @@ int main(int argc, char* argv[]) {
     } else {
         // Proceed with game initialization
         handle_player_action(shared_block->hip_mailbox, shared_block);
+        shared_block->state.level = shared_block->hip_mailbox.selected_level;
+        if (shared_block->state.level < 1 || shared_block->state.level > 3)
+        {
+            std::cerr << "[ARBITER] WARNING: selected_level was "
+                    << shared_block->state.level
+                    << " — defaulting to 1\n";
+            shared_block->state.level = 1;
+        }
+                std::cout << "[ARBITER DEBUG] hip_mailbox.selected_level = " 
+                << shared_block->hip_mailbox.selected_level << "\n";
+        std::cout << "[ARBITER DEBUG] state.level after assign = " 
+                << shared_block->state.level << "\n";
 
         arbiter.initialize_entities(0607, 7, 7, shared_block->state.level, shared_block->state.sublevel);
         arbiter.initialize_players_positions(shared_block->state.level, shared_block->state.sublevel);
