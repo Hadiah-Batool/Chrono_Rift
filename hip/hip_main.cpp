@@ -22,8 +22,8 @@ struct LevelTiles { const char* tile1; const char* tile2; };
 static const LevelTiles LEVEL_TILES[] = {
     { nullptr, nullptr },
     { "../MapsNScreen/Fiaona'aForest_Lvl_tile1.png", "../MapsNScreen/Fiaona'aForest_Lvl_tile2.png" },
-    { "../MapsNScreen/ForestRuins_lvl_tile1.png",    "../MapsNScreen/ForestRuins_lvl_tile2.png"    },
-    { "../MapsNScreen/Cathedral_lvl_tile1.png",      "../MapsNScreen/Cathedral_lvl_tile2.png"      },
+    { "../MapsNScreen/ForestRuins_lvl_tile2.png",    "../MapsNScreen/ForestRuins_lvl_tile1.png"    },
+    { "../MapsNScreen/Cathedral_lvl_tile2.png",      "../MapsNScreen/Cathedral_lvl_tile2.png"      },
 };
 
 // ── HIP Context ───────────────────────────────────────────────────────────────

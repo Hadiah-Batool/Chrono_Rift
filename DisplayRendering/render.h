@@ -145,6 +145,7 @@ void setLevelSelectedCallback(std::function<void(int)> cb)
 
 
 
+
 void setGameOverCallback(std::function<void(bool fullExit)> cb)
 {
     m_gameOverCallback = cb;
@@ -212,6 +213,16 @@ void run()
             std::cout << "[Renderer] Exited from menu\n";
             break;
         }
+        
+
+
+if (m_party.valid() && m_window->isOpen())
+{
+    int chosenLevel = menu.getSelectedLevel();
+    if (m_levelSelectedCallback)
+        m_levelSelectedCallback(chosenLevel);
+}
+
 
         // ── Notify HIP — spawns player threads + does arbiter handshake ──
         if (m_partyReadyCallback)
@@ -1140,32 +1151,25 @@ void drawAll(float dt)
     }
 
 
-    if (isShmMode() && m_shm->sublevel != m_lastSublevel)
-    {
-        std::cout << "[Renderer] Sublevel changed "
-                  << m_lastSublevel << " -> " << m_shm->sublevel
-                  << " — reloading enemy renderers + advancing map\n";
+// In drawAll(), replace the sublevel transition block with this:
 
-        // Wait until arbiter has actually populated the new enemies
-        // (num_active_enemies will be > 0 and enemies[0] will be alive)
-        bool newEnemiesReady = false;
-        for (int i = 0; i < m_shm->num_active_enemies; ++i)
-        {
-            if (m_shm->enemies[i].isAlive())
-            {
-                newEnemiesReady = true;
-                break;
-            }
-        }
+if (isShmMode() && m_shm->sublevel != m_lastSublevel)
+{
+    std::cout << "[Renderer] Sublevel changed "
+              << m_lastSublevel << " -> " << m_shm->sublevel
+              << " — reloading enemy renderers + advancing map\n";
 
-        if (newEnemiesReady)
-        {
-            loadEnemyRenderers();   // reload sprites for new enemy types
-            advanceMapScreen();     // switch map background
-            m_selectedEnemy  = 0;  // reset cursor to first enemy
-            m_lastSublevel   = m_shm->sublevel;
-        }
-    }
+
+    m_lastSublevel  = m_shm->sublevel;
+    m_selectedEnemy = 0;
+    advanceMapScreen();
+
+    // Load renderers if enemies are already populated
+    // If not yet, loadEnemyRenderers() will be called again
+    // when the wait-loop in run() detects num_active_enemies > 0
+    loadEnemyRenderers();
+}
+
 
     // ── map + characters ──────────────────────────────────────────────────
     if (m_map) m_map->draw(*m_window);
