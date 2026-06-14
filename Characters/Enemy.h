@@ -10,9 +10,9 @@
 
 enum class EnemyType
 {
-    ALIEN_ENEMY,
-    BEAST_ENEMY,
-    CYBOT_ENEMY,
+    ALIEN_ENEMY, // 0
+    BEAST_ENEMY, //1
+    CYBOT_ENEMY, // 
     DRAGONTANK_ENEMY,
     GIGAGAIA_ENEMY,
     GOBLIN_OGAN_ENEMY,
@@ -212,7 +212,7 @@ public:
             //1. 
             case EnemyType::ALIEN_ENEMY:
                 strncpy(name, "Alien",      sizeof(name) - 1);
-                setScale(2.0f, 2.0f);
+                setScale(3.0f, 3.0f);
                 break;
             //2. 
             case EnemyType::BEAST_ENEMY:
@@ -227,7 +227,7 @@ public:
                 //4.
             case EnemyType::DRAGONTANK_ENEMY:
                 strncpy(name, "Dragontank", sizeof(name) - 1);
-                setScale(2.5f, 2.5f);
+                setScale(0.5f, 0.5f);
                 break;
                 //5. 
             case EnemyType::GIGAGAIA_ENEMY:
